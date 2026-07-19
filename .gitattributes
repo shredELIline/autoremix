@@ -1,0 +1,12 @@
+* text=auto eol=lf
+
+*.apk binary
+*.aab binary
+*.flac binary
+*.gif binary
+*.jpg binary
+*.onnx binary
+*.png binary
+*.tflite binary
+*.wav binary
+*.xcassets/** binary

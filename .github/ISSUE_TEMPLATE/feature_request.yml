@@ -1,0 +1,55 @@
+name: Feature request
+description: Propose a scoped product or engineering change.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: State the user-visible or engineering problem.
+    validations:
+      required: true
+
+  - type: textarea
+    id: change
+    attributes:
+      label: Proposed change
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Shared C++ core
+        - Android
+        - iOS
+        - Audio or ML research
+        - Documentation or website
+        - Build and CI
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance evidence
+      description: Define measurable behavior, tests, or audio-quality gates.
+    validations:
+      required: true
+
+  - type: textarea
+    id: licensing
+    attributes:
+      label: Dependency or model licensing impact
+      description: Include source, weight, and dataset licenses for any proposed model.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and the roadmap.
+          required: true

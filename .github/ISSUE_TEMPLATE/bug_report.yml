@@ -1,0 +1,78 @@
+name: Bug report
+description: Report a reproducible defect.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not post secrets, private media, or security vulnerabilities.
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Android
+        - iOS
+        - Shared C++ core
+        - Documentation or website
+    validations:
+      required: true
+
+  - type: input
+    id: revision
+    attributes:
+      label: Version or commit
+      placeholder: v2.1.0 or commit SHA
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Device and OS
+      placeholder: Pixel 9 / Android 16, or iPhone 16 / iOS 18
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs or synthetic fixture
+      description: Remove personal paths and media metadata. Use redistributable audio only.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues.
+          required: true
+        - label: I removed secrets, private media, and signing material.
+          required: true

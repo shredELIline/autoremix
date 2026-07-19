@@ -1,0 +1,201 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cpp-release:
+    name: C++ / Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Configure
+        run: >-
+          cmake -S audio-core -B build/audio-core-release
+          -DCMAKE_BUILD_TYPE=Release
+          -DAUTOREMIX_AUDIO_CORE_BUILD_TESTS=ON
+          -DAUTOREMIX_AUDIO_CORE_BUILD_BENCHMARKS=ON
+
+      - name: Build
+        run: cmake --build build/audio-core-release --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build/audio-core-release --build-config Release --output-on-failure
+
+      - name: Benchmark smoke run
+        run: build/audio-core-release/autoremix_audio_core_benchmark
+
+  cpp-sanitizers:
+    name: C++ / ASan + UBSan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:strict_string_checks=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Configure
+        run: >-
+          cmake -S audio-core -B build/audio-core-sanitized
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_COMPILER=clang
+          -DCMAKE_CXX_COMPILER=clang++
+          -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          -DAUTOREMIX_AUDIO_CORE_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build/audio-core-sanitized --parallel
+
+      - name: Test
+        run: ctest --test-dir build/audio-core-sanitized --output-on-failure
+
+  android:
+    name: Android / lint, unit, assemble
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+
+      - name: Install Android toolchain
+        shell: bash
+        run: |
+          sdk_root="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          SDKMANAGER="${sdk_root}/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER"
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses >/dev/null
+          license_status=${PIPESTATUS[1]}
+          set -o pipefail
+          test "$license_status" -eq 0
+          "$SDKMANAGER" --install \
+            "platforms;android-37" \
+            "build-tools;37.0.0" \
+            "ndk;29.0.14206865" \
+            "cmake;3.31.6"
+
+      - name: Lint, unit test, and assemble
+        shell: bash
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon \
+            :platform-android:lintDebug \
+            :platform-android:testDebugUnitTest \
+            :platform-android:assembleDebug \
+            :platform-android:bundleDebug
+
+      - name: Upload Android reports and APK
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-debug
+          path: |
+            platform-android/build/reports/
+            platform-android/build/outputs/apk/debug/*.apk
+            platform-android/build/outputs/bundle/debug/*.aab
+          if-no-files-found: warn
+          retention-days: 7
+
+  ios:
+    name: iOS Simulator / build and test
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Build Release for simulator
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project platform-ios/AutoRemix.xcodeproj \
+            -scheme AutoRemix \
+            -configuration Release \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/ios-release \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Select simulator
+        id: simulator
+        shell: bash
+        run: |
+          simulator_id="$({ xcrun simctl list devices available --json | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          print(next(
+              device["udid"]
+              for runtime in sorted(devices, reverse=True)
+              for device in devices[runtime]
+              if "iPhone" in device["name"]
+          ))
+          '; })"
+          test -n "$simulator_id"
+          echo "id=$simulator_id" >> "$GITHUB_OUTPUT"
+
+      - name: Test on simulator
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project platform-ios/AutoRemix.xcodeproj \
+            -scheme AutoRemix \
+            -configuration Debug \
+            -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.id }}' \
+            -derivedDataPath build/ios-tests \
+            CODE_SIGNING_ALLOWED=NO \
+            test
+
+  docs:
+    name: Static documentation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Verify deterministic audio fixtures
+        run: |
+          python3 scripts/generate_audio_fixtures.py
+          git diff --exit-code -- docs/assets/audio tests/fixtures/golden
+
+      - name: Validate
+        run: python3 .github/scripts/validate_docs.py docs
