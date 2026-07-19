@@ -20,11 +20,20 @@ final class SceneAudioPlayer {
 
     private static final int OUTPUT_RATE = 48_000;
     private static final int BOUNDARY_MS = 14;
+    private static final int BOUNDARY_FRAMES = OUTPUT_RATE * BOUNDARY_MS / 1_000;
+    private static final int OUTPUT_BLOCK_FRAMES = 2_048;
+    private static final int LIMITER_LOOKAHEAD_FRAMES = 240;
     private static final int QUEUE_CAPACITY = 6;
     private final LinkedBlockingDeque<RenderedScene> queue = new LinkedBlockingDeque<>(QUEUE_CAPACITY);
     private final Object queueControl = new Object();
     private final Object outputControl = new Object();
     private final Listener listener;
+    private final MasterAudioGraph masterGraph =
+            new MasterAudioGraph(OUTPUT_BLOCK_FRAMES, LIMITER_LOOKAHEAD_FRAMES);
+    private final float[] renderBlock = new float[OUTPUT_BLOCK_FRAMES * 2];
+    private final float[] boundaryHead = new float[BOUNDARY_FRAMES * 2];
+    private final float[] boundaryBlend = new float[BOUNDARY_FRAMES * 2];
+    private final float[] boundaryTail = new float[BOUNDARY_FRAMES * 2];
     private volatile boolean running;
     private volatile boolean paused;
     private volatile long sceneFramesWritten;
@@ -35,6 +44,7 @@ final class SceneAudioPlayer {
     private volatile long requestedSeekScene;
     private volatile long sceneSerial;
     private volatile int queueUnderruns;
+    private volatile int activationUnderrunBaseline;
     private Thread thread;
     private AudioTrack track;
     private volatile NativeAudioEngine nativeEngine;
@@ -87,13 +97,22 @@ final class SceneAudioPlayer {
     long queuedDurationMs() {
         synchronized (queueControl) {
             long duration = 0L;
-            for (RenderedScene scene : queue) duration += scene.audio.durationMs();
+            for (RenderedScene scene : queue) duration += scene.durationMs();
             return duration;
         }
     }
 
     long bufferedHorizonMs() {
         return Math.max(0L, currentDurationMs() - currentPositionMs()) + queuedDurationMs();
+    }
+
+    long producerHorizonFrames() {
+        long frames = sceneSerial == 0L ? 0L
+                : Math.max(0L, sceneFramesTotal - sceneFramesWritten);
+        synchronized (queueControl) {
+            for (RenderedScene scene : queue) frames += scene.frames();
+        }
+        return frames;
     }
 
     int underruns() {
@@ -104,6 +123,18 @@ final class SceneAudioPlayer {
             else if (track != null) nativeUnderruns = track.getUnderrunCount();
         }
         return queueUnderruns + nativeUnderruns;
+    }
+
+    int activationUnderruns() {
+        return Math.max(0, underruns() - activationUnderrunBaseline);
+    }
+
+    MasterAudioGraph.ContinuityMetrics continuityMetrics() {
+        return masterGraph.snapshotMetrics();
+    }
+
+    long masterSampleClock() {
+        return masterGraph.sampleClock();
     }
 
     boolean replaceQueued(RenderedScene expected, RenderedScene replacement) {
@@ -195,7 +226,7 @@ final class SceneAudioPlayer {
                 if (opened != null) opened.close();
                 openAudioTrackFallback();
             }
-            float[] pendingTail = null;
+            int pendingTailSamples = 0;
             RenderedScene previous = null;
             while (running) {
                 waitIfPaused();
@@ -204,10 +235,10 @@ final class SceneAudioPlayer {
                     scene = queue.pollFirst();
                 }
                 if (scene == null) {
-                    if (pendingTail != null) {
-                        fadeOut(pendingTail);
-                        writeAll(pendingTail, 0, pendingTail.length);
-                        pendingTail = null;
+                    if (pendingTailSamples > 0) {
+                        fadeOut(boundaryTail, pendingTailSamples);
+                        writeAll(boundaryTail, 0, pendingTailSamples);
+                        pendingTailSamples = 0;
                         if (previous != null && listener != null) listener.onSceneFinished(previous);
                         previous = null;
                         queueUnderruns++;
@@ -216,47 +247,51 @@ final class SceneAudioPlayer {
                     continue;
                 }
                 if (listener != null && !listener.canStartScene(scene)) continue;
+                if (scene.transitionScene) {
+                    activationUnderrunBaseline = underruns();
+                    masterGraph.markTransitionActivation(scene.transitionId());
+                }
                 if (listener != null) listener.onSceneStarted(scene);
                 long serial = ++sceneSerial;
-                float[] audio = scene.audio.stereo;
                 sceneFramesWritten = 0L;
-                sceneFramesTotal = Math.max(1L, audio.length / 2L);
+                sceneFramesTotal = Math.max(1L, scene.frames());
                 NativeAudioEngine engine = nativeEngine;
                 sceneClockOriginFrames = outputClockFrames()
                         + (engine == null ? 0L : engine.queuedFrames());
-                int overlapSamples = Math.min(audio.length / 4,
-                        OUTPUT_RATE * BOUNDARY_MS / 1000 * 2);
+                int overlapSamples = Math.min(scene.frames() * 2,
+                        BOUNDARY_FRAMES * 2);
                 overlapSamples -= overlapSamples % 2;
-                if (pendingTail != null) {
-                    int count = Math.min(pendingTail.length, overlapSamples);
-                    float[] blend = new float[count];
+                if (pendingTailSamples > 0) {
+                    int count = Math.min(pendingTailSamples, overlapSamples);
+                    scene.renderFrames(0L, count / 2, boundaryHead, 0);
                     for (int i = 0; i < count; i += 2) {
                         float p = count <= 2 ? 1f : i / (float) (count - 2);
                         float a = (float) Math.cos(p * Math.PI * .5);
                         float b = (float) Math.sin(p * Math.PI * .5);
-                        blend[i] = pendingTail[i] * a + audio[i] * b;
-                        blend[i + 1] = pendingTail[i + 1] * a + audio[i + 1] * b;
+                        boundaryBlend[i] = boundaryTail[i] * a + boundaryHead[i] * b;
+                        boundaryBlend[i + 1] = boundaryTail[i + 1] * a
+                                + boundaryHead[i + 1] * b;
                     }
-                    writeAll(blend, 0, blend.length);
-                    sceneFramesWritten += blend.length / 2L;
+                    writeAll(boundaryBlend, 0, count);
+                    sceneFramesWritten += count / 2L;
                     if (previous != null && listener != null) listener.onSceneFinished(previous);
                 } else if (overlapSamples > 0) {
-                    float[] head = new float[overlapSamples];
-                    System.arraycopy(audio, 0, head, 0, overlapSamples);
-                    fadeIn(head);
-                    writeAll(head, 0, head.length);
-                    sceneFramesWritten += head.length / 2L;
+                    scene.renderFrames(0L, overlapSamples / 2, boundaryHead, 0);
+                    fadeIn(boundaryHead, overlapSamples);
+                    writeAll(boundaryHead, 0, overlapSamples);
+                    sceneFramesWritten += overlapSamples / 2L;
                 }
-                int start = overlapSamples;
-                int end = Math.max(start, audio.length - overlapSamples);
-                writeSceneBody(audio, start, end, serial);
-                pendingTail = new float[audio.length - end];
-                System.arraycopy(audio, end, pendingTail, 0, pendingTail.length);
+                int overlapFrames = overlapSamples / 2;
+                int start = overlapFrames;
+                int end = Math.max(start, scene.frames() - overlapFrames);
+                writeSceneBody(scene, start, end, serial);
+                pendingTailSamples = (scene.frames() - end) * 2;
+                scene.renderFrames(end, scene.frames() - end, boundaryTail, 0);
                 previous = scene;
             }
-            if (pendingTail != null) {
-                fadeOut(pendingTail);
-                writeAll(pendingTail, 0, pendingTail.length);
+            if (pendingTailSamples > 0) {
+                fadeOut(boundaryTail, pendingTailSamples);
+                writeAll(boundaryTail, 0, pendingTailSamples);
             }
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
@@ -301,17 +336,14 @@ final class SceneAudioPlayer {
         int end = offset + length;
         while (running && position < end) {
             waitIfPaused();
-            int chunk = Math.min(4096, end - position);
-            int wrote = writeOutput(audio, position, chunk);
-            if (wrote < 0) {
-                if (!running) return;
-                throw new IllegalStateException("Audio output write " + wrote);
-            }
+            int chunk = Math.min(OUTPUT_BLOCK_FRAMES * 2, end - position);
+            int wrote = processAndWrite(audio, position, chunk);
+            if (wrote < 0) return;
             position += wrote;
         }
     }
 
-    private void writeSceneBody(float[] audio, int start, int end, long serial)
+    private void writeSceneBody(RenderedScene scene, int start, int end, long serial)
             throws InterruptedException {
         int position = start;
         while (running && position < end) {
@@ -320,22 +352,24 @@ final class SceneAudioPlayer {
             if (seekMs >= 0L) {
                 requestedSeekMs = -1L;
                 if (requestedSeekScene != serial) continue;
-                int target = (int) Math.min(end - 2L,
-                        Math.max(start, Math.round(seekMs * OUTPUT_RATE / 1000.0) * 2L));
+                int target = (int) Math.min(end - 1L,
+                        Math.max(start, Math.round(seekMs * OUTPUT_RATE / 1000.0)));
                 synchronized (outputControl) {
                     NativeAudioEngine engine = nativeEngine;
                     if (engine != null) {
-                        if (!engine.seek(target / 2L)) {
+                        if (!engine.seek(target)) {
                             throw new IllegalStateException("Oboe seek rejected");
                         }
                     } else {
                         track.pause();
                         track.flush();
                     }
-                    sceneClockOriginFrames = outputClockFrames() - target / 2L;
-                    int consumed = writeSeekRamp(audio, target);
+                    masterGraph.restartProcessingNodes();
+                    scene.resetRenderPosition(target);
+                    sceneClockOriginFrames = outputClockFrames() - target;
+                    int consumed = writeSeekRamp(scene, target);
                     position = Math.min(end, target + consumed);
-                    sceneFramesWritten = position / 2L;
+                    sceneFramesWritten = position;
                     if (engine != null) {
                         if (!engine.completeSeek()) {
                             throw new IllegalStateException("Oboe seek resume rejected");
@@ -345,16 +379,49 @@ final class SceneAudioPlayer {
                     }
                 }
             }
-            int chunk = Math.min(4096, end - position);
-            int wrote = writeOutput(audio, position, chunk);
-            if (wrote < 0) {
-                if (!running) return;
-                throw new IllegalStateException("Audio output write " + wrote);
-            }
-            if (wrote == 0) continue;
+            int chunk = Math.min(OUTPUT_BLOCK_FRAMES, end - position);
+            int wrote = renderAndWrite(scene, position, chunk);
+            if (wrote < 0) return;
             position += wrote;
-            sceneFramesWritten = position / 2L;
+            sceneFramesWritten = position;
         }
+    }
+
+    private int renderAndWrite(RenderedScene scene, int startFrame, int frameCount)
+            throws InterruptedException {
+        scene.renderFrames(startFrame, frameCount, renderBlock, 0);
+        masterGraph.processBlock(renderBlock, 0, frameCount);
+        int writtenSamples = 0;
+        int sampleCount = frameCount * 2;
+        while (running && writtenSamples < sampleCount) {
+            waitIfPaused();
+            int amount = writeOutput(renderBlock, writtenSamples,
+                    sampleCount - writtenSamples);
+            if (amount < 0) {
+                if (!running) return -1;
+                throw new IllegalStateException("Audio output write " + amount);
+            }
+            writtenSamples += amount;
+        }
+        return writtenSamples / 2;
+    }
+
+    private int processAndWrite(float[] audio, int offset, int length)
+            throws InterruptedException {
+        int evenLength = length - length % 2;
+        if (evenLength <= 0) return 0;
+        masterGraph.processBlock(audio, offset / 2, evenLength / 2);
+        int written = 0;
+        while (running && written < evenLength) {
+            waitIfPaused();
+            int amount = writeOutput(audio, offset + written, evenLength - written);
+            if (amount < 0) {
+                if (!running) return -1;
+                throw new IllegalStateException("Audio output write " + amount);
+            }
+            written += amount;
+        }
+        return written;
     }
 
     private int writeOutput(float[] audio, int offset, int length) throws InterruptedException {
@@ -398,15 +465,15 @@ final class SceneAudioPlayer {
         }
     }
 
-    private int writeSeekRamp(float[] audio, int target) throws InterruptedException {
-        int rampSamples = Math.min(OUTPUT_RATE * 16 / 1000 * 2, audio.length - target);
-        rampSamples -= rampSamples % 2;
-        if (rampSamples <= 2) return 0;
-        float[] fadeIn = new float[rampSamples];
-        System.arraycopy(audio, target, fadeIn, 0, rampSamples);
+    private int writeSeekRamp(RenderedScene scene, int targetFrame) throws InterruptedException {
+        int rampFrames = Math.min(OUTPUT_RATE * 16 / 1000,
+                scene.frames() - targetFrame);
+        if (rampFrames <= 1) return 0;
+        float[] fadeIn = new float[rampFrames * 2];
+        scene.renderFrames(targetFrame, rampFrames, fadeIn, 0);
         fadeIn(fadeIn);
         writeAll(fadeIn, 0, fadeIn.length);
-        return rampSamples;
+        return rampFrames;
     }
 
     private void reportControlError(String event, RuntimeException error) {
@@ -438,8 +505,12 @@ final class SceneAudioPlayer {
     }
 
     private static void fadeIn(float[] audio) {
-        for (int i = 0; i < audio.length; i += 2) {
-            float p = audio.length <= 2 ? 1f : i / (float) (audio.length - 2);
+        fadeIn(audio, audio.length);
+    }
+
+    private static void fadeIn(float[] audio, int length) {
+        for (int i = 0; i < length; i += 2) {
+            float p = length <= 2 ? 1f : i / (float) (length - 2);
             float g = (float) Math.sin(p * Math.PI * .5);
             audio[i] *= g;
             audio[i + 1] *= g;
@@ -447,8 +518,12 @@ final class SceneAudioPlayer {
     }
 
     private static void fadeOut(float[] audio) {
-        for (int i = 0; i < audio.length; i += 2) {
-            float p = audio.length <= 2 ? 1f : i / (float) (audio.length - 2);
+        fadeOut(audio, audio.length);
+    }
+
+    private static void fadeOut(float[] audio, int length) {
+        for (int i = 0; i < length; i += 2) {
+            float p = length <= 2 ? 1f : i / (float) (length - 2);
             float g = (float) Math.cos(p * Math.PI * .5);
             audio[i] *= g;
             audio[i + 1] *= g;

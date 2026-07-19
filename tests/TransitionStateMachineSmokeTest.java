@@ -13,7 +13,7 @@ public final class TransitionStateMachineSmokeTest {
         TransitionStateMachine machine = new TransitionStateMachine();
         machine.selectTarget();
         machine.beginPreparing();
-        machine.fallbackReady(true);
+        machine.candidateReady(true);
         machine.neuralCandidatesPending();
         machine.arm(40L);
         machine.waitForActivationBoundary();
@@ -40,7 +40,7 @@ public final class TransitionStateMachineSmokeTest {
         machine.beginPreparing();
         boolean rejected = false;
         try {
-            machine.fallbackReady(false);
+            machine.candidateReady(false);
         } catch (IllegalStateException expected) {
             rejected = true;
         }
@@ -66,7 +66,7 @@ public final class TransitionStateMachineSmokeTest {
         TransitionStateMachine machine = new TransitionStateMachine();
         machine.selectTarget();
         machine.beginPreparing();
-        machine.fallbackReady(true);
+        machine.candidateReady(true);
         machine.arm(boundary);
         machine.waitForActivationBoundary();
         return machine;

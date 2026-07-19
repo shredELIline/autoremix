@@ -2,10 +2,27 @@ package com.alexey.autoremix;
 
 import android.content.Context;
 
+import java.util.function.BooleanSupplier;
+
 /** Offline-ahead scene renderer: decode → tempo match → stem separation → layer narrative → master. */
 final class SceneRenderer {
     private static final int PROCESS_RATE = 32_000;
     private static final int OUTPUT_RATE = SceneAudioPlayer.outputRate();
+    private static final long TARGET_RUNWAY_RESERVE_MS = 22_000L;
+
+    static final class ContinuousRender {
+        final RenderedScene scene;
+        final ContinuousScenePlanner.PlanningResult planning;
+        final AudioContinuityValidator.Metrics landingMetrics;
+
+        ContinuousRender(RenderedScene scene,
+                         ContinuousScenePlanner.PlanningResult planning,
+                         AudioContinuityValidator.Metrics landingMetrics) {
+            this.scene = scene;
+            this.planning = planning;
+            this.landingMetrics = landingMetrics;
+        }
+    }
 
     private SceneRenderer() {}
 
@@ -96,10 +113,13 @@ final class SceneRenderer {
         long transitionMs = barsToMs(aAnalysis.bpm, plan.bars);
         transitionMs = Math.max(18_000L, Math.min(48_000L, transitionMs));
         long remainingA = Math.max(0L, aTrack.durationMs - aPositionMs - 1_500L);
-        soloMs = Math.max(12_000L, Math.min(soloMs, Math.max(12_000L, remainingA - transitionMs)));
+        boolean includeSoloPrefix = soloMs > 0L;
+        soloMs = soloMs <= 0L ? 0L
+                : Math.max(12_000L, Math.min(soloMs,
+                Math.max(12_000L, remainingA - transitionMs)));
         long requiredA = Math.min(remainingA, soloMs + transitionMs);
         if (requiredA < 22_000L) throw new IllegalStateException("outgoing track has no safe transition tail");
-        soloMs = Math.max(4_000L, requiredA - transitionMs);
+        soloMs = includeSoloPrefix ? Math.max(4_000L, requiredA - transitionMs) : 0L;
 
         PcmAudio aProgramme = PcmDecoder.decode(context, aTrack, aPositionMs,
                 soloMs + transitionMs + 500L, PROCESS_RATE);
@@ -159,7 +179,179 @@ final class SceneRenderer {
                 anchorPosition, title, description, true);
     }
 
-    /** Guaranteed last-resort bridge. It is bounded, equal-power, normalized and never cuts PCM. */
+    static ContinuousRender renderContinuousTransition(
+            Context context,
+            Track aTrack, TrackAnalysis aAnalysis,
+            TrackAnalysis.Fragment aFragment, long aPositionMs,
+            Track bTrack, TrackAnalysis bAnalysis,
+            TrackAnalysis.Fragment bFragment, LayerPlan hint,
+            long transitionId, long activationSample,
+            int activationUnderruns, boolean userForcedSkip,
+            BooleanSupplier preparationDeadlineSafe) throws Exception {
+        long transitionMs = Math.max(18_000L,
+                Math.min(48_000L, barsToMs(aAnalysis.bpm, 16)));
+        long postLandingMs = Math.max(8_000L,
+                Math.min(24_000L, barsToMs(aAnalysis.bpm, 8)));
+        int transitionFrames = msToFrames(transitionMs);
+        int postLandingFrames = msToFrames(postLandingMs);
+        long remainingA = Math.max(0L, aTrack.durationMs - aPositionMs - 1_000L);
+        if (remainingA < transitionMs) {
+            throw new IllegalStateException("outgoing track has no 16-bar stem runway");
+        }
+
+        PcmAudio aDecoded = PcmDecoder.decode(context, aTrack, aPositionMs,
+                transitionMs + 750L, PROCESS_RATE);
+        requirePreparationDeadline(preparationDeadlineSafe);
+        if (aDecoded.frames() < transitionFrames) {
+            throw new IllegalStateException("outgoing decode has insufficient runway");
+        }
+        applyProgramGain(aDecoded.stereo, aAnalysis.loudnessDb);
+        PcmAudio aTransition = fitLength(aDecoded, transitionFrames);
+
+        long bInputMs = Math.round((transitionMs + postLandingMs) * hint.tempoRatio) + 3_000L;
+        long latestBStart = Math.max(0L,
+                bTrack.durationMs - bInputMs - TARGET_RUNWAY_RESERVE_MS);
+        long bStart = Math.max(0L, Math.min(latestBStart, bFragment.cueMs));
+        PcmAudio bRaw = PcmDecoder.decode(context, bTrack, bStart, bInputMs, PROCESS_RATE);
+        requirePreparationDeadline(preparationDeadlineSafe);
+        if (bRaw.durationMs() + 1_000L < bInputMs) {
+            throw new IllegalStateException("target decode has insufficient runway");
+        }
+        applyProgramGain(bRaw.stereo, bAnalysis.loudnessDb);
+        PcmAudio bMatched = WsolaTimeStretch.stretch(bRaw, hint.tempoRatio);
+        int oneBeatFrames = Math.max(PROCESS_RATE / 4,
+                Math.round(PROCESS_RATE * 60f / Math.max(65f, aAnalysis.bpm)));
+        BeatPhaseAligner.Result phase = BeatPhaseAligner.alignForward(
+                aTransition, bMatched, oneBeatFrames);
+        requirePreparationDeadline(preparationDeadlineSafe);
+        if (phase.audio.frames() < transitionFrames + postLandingFrames) {
+            throw new IllegalStateException("target decode has insufficient aligned runway");
+        }
+        PcmAudio bAligned = fitLength(phase.audio, transitionFrames + postLandingFrames);
+        PcmAudio bTransition = bAligned.sliceFrames(0, transitionFrames);
+
+        StemBundle aStems = SpectralStemSeparator.separate(aTransition);
+        requirePreparationDeadline(preparationDeadlineSafe);
+        StemBundle bStems = SpectralStemSeparator.separate(bTransition);
+        requirePreparationDeadline(preparationDeadlineSafe);
+        long outputSamplesPerBar = Math.max(1L,
+                Math.round(transitionMs * OUTPUT_RATE / 16_000.0));
+        long sourceStartSample = Math.max(0L,
+                Math.round(aPositionMs * OUTPUT_RATE / 1_000.0));
+        long phaseSourceMs = Math.round(phase.skippedFrames * 1_000.0
+                / PROCESS_RATE * hint.tempoRatio);
+        long targetLandingMs = bStart + phaseSourceMs
+                + Math.round(transitionMs * hint.tempoRatio);
+        long targetLandingSample = Math.max(0L,
+                Math.round(targetLandingMs * OUTPUT_RATE / 1_000.0));
+        float separatorConfidence = separatorConfidence(aAnalysis, bAnalysis, aStems, bStems);
+        float rhythm = 1f - Math.min(1f, Math.abs(1f - hint.tempoRatio) / .12f);
+        float harmony = RemixPlanner.keyCompatibility(aAnalysis, bAnalysis);
+        float timbre = ContinuityDirector.advancedVibeSimilarity(
+                aAnalysis, aFragment, bAnalysis, bFragment);
+        float energy = 1f - Math.min(1f, Math.abs(aFragment.energy - bFragment.energy));
+        ContinuousScenePlanner.PlanningRequest.Builder request =
+                ContinuousScenePlanner.PlanningRequest.builder(
+                                transitionId, aTrack.id, bTrack.id,
+                                activationSample, outputSamplesPerBar)
+                        .sourceStartSample(sourceStartSample)
+                        .targetLandingSample(targetLandingSample)
+                        .separator(true, separatorConfidence)
+                        .buffer(true, outputSamplesPerBar * 16L,
+                                activationUnderruns, 0f)
+                        .sampleDiscontinuity(0f)
+                        .vocalChopSafe(!aFragment.isVocalHeavy())
+                        .vocalActivity(aFragment.isVocalHeavy(), bFragment.isVocalHeavy())
+                        .legacyVocalSafe(!(aFragment.isVocalHeavy()
+                                && bFragment.isVocalHeavy()))
+                        .fallbacks(true, true, true)
+                        .userForcedSkip(userForcedSkip)
+                        .compatibility(rhythm, harmony, timbre, .82f, energy,
+                                Math.max(.55f, phase.confidence))
+                        // B is already WSOLA-matched above. The scheduled nodes therefore read
+                        // at unity tempo; non-unity automation remains available to other plans.
+                        .transforms(1f, 0f, 0f);
+        addStemDescriptor(request, ContinuousSceneTransitionPlan.SemanticRole.LEAD_VOCAL,
+                aTrack.id, bTrack.id, aStems.leadRms, bStems.leadRms,
+                1f - Math.abs(aFragment.vocalPresence - bFragment.vocalPresence),
+                separatorConfidence);
+        addStemDescriptor(request, ContinuousSceneTransitionPlan.SemanticRole.DRUMS,
+                aTrack.id, bTrack.id, aStems.drumsRms, bStems.drumsRms,
+                1f - Math.abs(aFragment.percussiveness - bFragment.percussiveness),
+                separatorConfidence);
+        addStemDescriptor(request, ContinuousSceneTransitionPlan.SemanticRole.BASS,
+                aTrack.id, bTrack.id, aStems.bassRms, bStems.bassRms,
+                1f - Math.abs(aFragment.bassPresence - bFragment.bassPresence),
+                separatorConfidence);
+        ContinuousSceneTransitionPlan.SemanticRole backingRole = backingRole(hint.type);
+        addStemDescriptor(request, backingRole, aTrack.id, bTrack.id,
+                aStems.backingRms, bStems.backingRms,
+                1f - Math.abs(aFragment.brightness - bFragment.brightness),
+                separatorConfidence);
+
+        ContinuousScenePlanner.PlanningResult planning =
+                new ContinuousScenePlanner().plan(request.build());
+        if (!planning.hasPlan() || !planning.plan.isStemBased()) {
+            throw new IllegalStateException("stem plan rejected: "
+                    + (planning.fallbackReason == null ? "UNKNOWN"
+                    : planning.fallbackReason.name()));
+        }
+        PreparedStemScene preparedStemScene = new PreparedStemScene(
+                planning.plan, aStems, bStems, bAligned, OUTPUT_RATE,
+                transitionFrames, transitionFrames + postLandingFrames);
+        int validationPaddingFrames = OUTPUT_RATE / 10;
+        int validationStart = Math.max(0,
+                preparedStemScene.transitionFrames() - validationPaddingFrames);
+        int validationFrames = Math.min(validationPaddingFrames * 2,
+                preparedStemScene.frames() - validationStart);
+        float[] verificationPcm = new float[validationFrames * 2];
+        preparedStemScene.render(verificationPcm, 0, validationStart, validationFrames);
+        PcmAudio verification = new PcmAudio(OUTPUT_RATE, verificationPcm);
+        long landingOffset = Math.min(verification.frames() - 2L, Math.max(2L,
+                preparedStemScene.transitionFrames() - validationStart));
+        AudioContinuityValidator.Metrics landingMetrics =
+                AudioContinuityValidator.analyze(verification, landingOffset, 0);
+        requirePreparationDeadline(preparationDeadlineSafe);
+        if (!landingMetrics.passesTransitionGate()) {
+            throw new IllegalStateException("landing quality gate failed");
+        }
+        preparedStemScene.resetForSeek(0L);
+        long consumedBMs = phaseSourceMs
+                + Math.round((transitionMs + postLandingMs) * hint.tempoRatio);
+        long anchorPosition = Math.min(bTrack.durationMs - 1_000L,
+                bStart + consumedBMs);
+        String description = planning.plan.selectedStrategy.name()
+                + " · deterministic structured stem scene · anchor "
+                + planning.plan.selectedAnchorSet.get(0).semanticRole.name()
+                + " · single vocal owner · one master timeline";
+        RenderedScene scene = new RenderedScene(
+                new PcmAudio(OUTPUT_RATE, new float[0]),
+                bTrack, bAnalysis, bFragment,
+                anchorPosition, aTrack.displayName() + "  ×  " + bTrack.displayName(),
+                description, true).withPreparedStemScene(preparedStemScene, planning.plan);
+        return new ContinuousRender(scene, planning, landingMetrics);
+    }
+
+    private static void requirePreparationDeadline(BooleanSupplier deadlineSafe) {
+        if (deadlineSafe != null && !deadlineSafe.getAsBoolean()) {
+            throw new IllegalStateException("insufficient buffer preparation deadline");
+        }
+    }
+
+    static RenderedScene renderPhraseAwareCrossfade(
+            Context context,
+            Track aTrack, TrackAnalysis aAnalysis,
+            TrackAnalysis.Fragment aFragment, long aPositionMs,
+            Track bTrack, TrackAnalysis bAnalysis,
+            TrackAnalysis.Fragment bFragment,
+            long durationMs) throws Exception {
+        long phraseMs = Math.max(10_000L, Math.min(18_000L, durationMs));
+        return renderFallbackCrossfade(context, aTrack, aAnalysis, aFragment,
+                aPositionMs, bTrack, bAnalysis, bFragment, phraseMs,
+                "Phrase-aware fallback · explicit stem failure", 10);
+    }
+
+    /** Guaranteed last resort. Bounded, normalized, and never used as the primary path. */
     static RenderedScene renderEmergencyCrossfade(Context context,
                                                    Track aTrack, TrackAnalysis aAnalysis,
                                                    TrackAnalysis.Fragment aFragment, long aPositionMs,
@@ -167,6 +359,18 @@ final class SceneRenderer {
                                                    TrackAnalysis.Fragment bFragment,
                                                    long durationMs) throws Exception {
         long bridgeMs = Math.max(6_000L, Math.min(12_000L, durationMs));
+        return renderFallbackCrossfade(context, aTrack, aAnalysis, aFragment,
+                aPositionMs, bTrack, bAnalysis, bFragment, bridgeMs,
+                "Basic emergency crossfade · explicit final fallback", 8);
+    }
+
+    private static RenderedScene renderFallbackCrossfade(
+            Context context,
+            Track aTrack, TrackAnalysis aAnalysis,
+            TrackAnalysis.Fragment aFragment, long aPositionMs,
+            Track bTrack, TrackAnalysis bAnalysis,
+            TrackAnalysis.Fragment bFragment,
+            long bridgeMs, String description, int edgeMs) throws Exception {
         long aStart = Math.max(0L, Math.min(aPositionMs,
                 Math.max(0L, aTrack.durationMs - bridgeMs - 1_000L)));
         long bStart = Math.max(0L, Math.min(bFragment.cueMs,
@@ -178,22 +382,33 @@ final class SceneRenderer {
         int frames = Math.min(a.frames(), b.frames());
         if (frames < PROCESS_RATE * 2) throw new IllegalStateException("no emergency bridge audio");
         float[] mixed = new float[frames * 2];
+        boolean strictVocalHandoff = aFragment.isVocalHeavy() && bFragment.isVocalHeavy();
         for (int frame = 0; frame < frames; frame++) {
             float p = frame / (float) Math.max(1, frames - 1);
-            float gainA = (float) Math.cos(p * Math.PI * .5);
-            float gainB = (float) Math.sin(p * Math.PI * .5);
+            float gainA;
+            float gainB;
+            if (strictVocalHandoff) {
+                gainA = p >= .48f ? 0f
+                        : (float) Math.cos(Math.min(1f, p / .48f) * Math.PI * .5);
+                gainB = p <= .52f ? 0f
+                        : (float) Math.sin(Math.min(1f, (p - .52f) / .48f)
+                        * Math.PI * .5);
+            } else {
+                gainA = (float) Math.cos(p * Math.PI * .5);
+                gainB = (float) Math.sin(p * Math.PI * .5);
+            }
             int sample = frame * 2;
             mixed[sample] = a.stereo[sample] * gainA + b.stereo[sample] * gainB;
             mixed[sample + 1] = a.stereo[sample + 1] * gainA + b.stereo[sample + 1] * gainB;
         }
         MasteringChain.processInPlace(mixed, PROCESS_RATE);
         PcmAudio output = PcmDecoder.resample(new PcmAudio(PROCESS_RATE, mixed), OUTPUT_RATE);
-        MasteringChain.applyEdgeSafety(output.stereo, OUTPUT_RATE, 8);
+        MasteringChain.applyEdgeSafety(output.stereo, OUTPUT_RATE, edgeMs);
         long consumedB = Math.round(frames * 1000.0 / PROCESS_RATE);
         return new RenderedScene(output, bTrack, bAnalysis, bFragment,
                 Math.min(bTrack.durationMs - 1_000L, bStart + consumedB),
                 aTrack.displayName() + "  ×  " + bTrack.displayName(),
-                "Guaranteed click-free fallback · equal-power PCM bridge", true);
+                description, true);
     }
 
     private static PcmAudio fitLength(PcmAudio input, int targetFrames) {
@@ -215,6 +430,47 @@ final class SceneRenderer {
             }
         }
         return new PcmAudio(input.sampleRate, out);
+    }
+
+    private static void addStemDescriptor(
+            ContinuousScenePlanner.PlanningRequest.Builder request,
+            ContinuousSceneTransitionPlan.SemanticRole role,
+            long sourceTrackId, long targetTrackId,
+            float sourceRms, float targetRms,
+            float similarity, float confidence) {
+        long sourceId = sourceRms > 1e-5f ? fragmentId(sourceTrackId, role) : -1L;
+        long targetId = targetRms > 1e-5f ? fragmentId(targetTrackId, role) : -1L;
+        request.stem(role, sourceId, targetId,
+                Math.max(0f, Math.min(1f, similarity)), confidence);
+    }
+
+    private static long fragmentId(
+            long trackId, ContinuousSceneTransitionPlan.SemanticRole role) {
+        return (trackId * 31L + role.ordinal() + 1L) & Long.MAX_VALUE;
+    }
+
+    private static ContinuousSceneTransitionPlan.SemanticRole backingRole(
+            LayerPlan.Type type) {
+        if (type == LayerPlan.Type.ATMOSPHERE_CHAIN) {
+            return ContinuousSceneTransitionPlan.SemanticRole.ATMOSPHERE;
+        }
+        if (type == LayerPlan.Type.MELODY_RELAY_TAKEOVER) {
+            return ContinuousSceneTransitionPlan.SemanticRole.GUITAR;
+        }
+        return ContinuousSceneTransitionPlan.SemanticRole.HARMONY;
+    }
+
+    private static float separatorConfidence(
+            TrackAnalysis aAnalysis, TrackAnalysis bAnalysis,
+            StemBundle a, StemBundle b) {
+        float analysis = Math.min(aAnalysis.styleConfidence, bAnalysis.styleConfidence);
+        int activePairs = 0;
+        if (a.leadRms > 1e-5f && b.leadRms > 1e-5f) activePairs++;
+        if (a.drumsRms > 1e-5f && b.drumsRms > 1e-5f) activePairs++;
+        if (a.bassRms > 1e-5f && b.bassRms > 1e-5f) activePairs++;
+        if (a.backingRms > 1e-5f && b.backingRms > 1e-5f) activePairs++;
+        return Math.max(.40f, Math.min(.88f,
+                .34f + analysis * .50f + activePairs * .02f));
     }
 
     private static void applyProgramGain(float[] audio, float loudnessDb) {

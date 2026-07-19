@@ -205,6 +205,22 @@ internal data class EngineUiState(
     val recentFragmentIds: String,
     val neuralUpgrades: Int,
     val fallbackReason: String,
+    val selectedStrategy: String,
+    val aiPlannerUsed: Boolean,
+    val stemSeparatorUsed: Boolean,
+    val selectedAnchor: String,
+    val anchorConfidence: Float,
+    val vocalOwnerTimeline: String,
+    val stemOwnershipTimeline: String,
+    val activationGapMs: Double,
+    val activationUnderruns: Int,
+    val activationMaxSampleJump: Float,
+    val activationMaxDerivativeJump: Float,
+    val activationLufsJump: Double,
+    val activationSpectralFluxSpike: Double,
+    val stemPathRate: Float,
+    val legacyRate: Float,
+    val basicCrossfadeRate: Float,
 ) {
     companion object {
         fun read(): EngineUiState = EngineUiState(
@@ -240,6 +256,23 @@ internal data class EngineUiState(
             recentFragmentIds = RemixEngineService.recentFragmentIds,
             neuralUpgrades = RemixEngineService.neuralUpgradesApplied,
             fallbackReason = RemixEngineService.fallbackReason,
+            selectedStrategy = RemixEngineService.selectedStrategy,
+            aiPlannerUsed = RemixEngineService.aiPlannerUsed,
+            stemSeparatorUsed = RemixEngineService.stemSeparatorUsed,
+            selectedAnchor = RemixEngineService.selectedAnchor,
+            anchorConfidence = RemixEngineService.anchorConfidence,
+            vocalOwnerTimeline = RemixEngineService.vocalOwnerTimeline,
+            stemOwnershipTimeline = RemixEngineService.stemOwnershipTimeline,
+            activationGapMs = RemixEngineService.activationGapMs,
+            activationUnderruns = RemixEngineService.activationUnderruns,
+            activationMaxSampleJump = RemixEngineService.activationMaxSampleJump,
+            activationMaxDerivativeJump = RemixEngineService.activationMaxDerivativeJump,
+            activationLufsJump = RemixEngineService.activationLufsJump,
+            activationSpectralFluxSpike = RemixEngineService.activationSpectralFluxSpike,
+            stemPathRate = RemixEngineService.aiLayeredTransitionRate +
+                RemixEngineService.deterministicStemTransitionRate,
+            legacyRate = RemixEngineService.legacyTransitionRate,
+            basicCrossfadeRate = RemixEngineService.basicCrossfadeRate,
         )
 
         fun demo() = EngineUiState(
@@ -275,6 +308,22 @@ internal data class EngineUiState(
             recentFragmentIds = "7,8",
             neuralUpgrades = 0,
             fallbackReason = "instant Level 0",
+            selectedStrategy = "PRESERVE_GUITAR",
+            aiPlannerUsed = false,
+            stemSeparatorUsed = true,
+            selectedAnchor = "GUITAR",
+            anchorConfidence = .91f,
+            vocalOwnerTimeline = "AAAAAA------BBBBBB",
+            stemOwnershipTimeline = "LEAD_VOCAL     AAAAAA------BBBBBB\nGUITAR         AAAAAAAAAA--BBBBBB\nDRUMS          AAAAA---BBBBBBBBBB",
+            activationGapMs = 0.0,
+            activationUnderruns = 0,
+            activationMaxSampleJump = .018f,
+            activationMaxDerivativeJump = .031f,
+            activationLufsJump = .4,
+            activationSpectralFluxSpike = .03,
+            stemPathRate = 1f,
+            legacyRate = 0f,
+            basicCrossfadeRate = 0f,
         )
     }
 }
@@ -564,6 +613,39 @@ private fun TransitionCard(state: EngineUiState, onExport: () -> Unit) {
             "fallback: ${state.fallbackReason}",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontSize = 10.sp,
+            maxLines = 1,
+        )
+        Text(
+            "${state.selectedStrategy} | AI ${if (state.aiPlannerUsed) "yes" else "no"} | stems ${if (state.stemSeparatorUsed) "yes" else "no"} | anchor ${state.selectedAnchor} ${"%.0f".format(state.anchorConfidence * 100f)}%",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 10.sp,
+            maxLines = 1,
+        )
+        if (state.vocalOwnerTimeline.isNotBlank()) {
+            Text(
+                "VOCALS ${state.vocalOwnerTimeline}",
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 10.sp,
+            )
+        }
+        if (state.stemOwnershipTimeline.isNotBlank()) {
+            Text(
+                state.stemOwnershipTimeline,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 9.sp,
+                maxLines = 5,
+            )
+        }
+        Text(
+            "activation gap ${"%.2f".format(state.activationGapMs)} ms | underrun ${state.activationUnderruns} | Δsample ${"%.3f".format(state.activationMaxSampleJump)} | Δderivative ${"%.3f".format(state.activationMaxDerivativeJump)}",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 9.sp,
+            maxLines = 1,
+        )
+        Text(
+            "ΔLUFS ${"%.2f".format(state.activationLufsJump)} | spectral ${"%.3f".format(state.activationSpectralFluxSpike)} | stem ${"%.0f".format(state.stemPathRate * 100f)}% | legacy ${"%.0f".format(state.legacyRate * 100f)}% | basic ${"%.0f".format(state.basicCrossfadeRate * 100f)}%",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 9.sp,
             maxLines = 1,
         )
         Button(onClick = onExport, modifier = Modifier.padding(top = 8.dp)) {

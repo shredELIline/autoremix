@@ -107,8 +107,9 @@ public final class ContinuationPlannerSmokeTest {
         if (report.contains("private-track-name") || report.contains("audio=")) {
             throw new AssertionError("debug report leaked media identity");
         }
-        if (!report.contains("guaranteed_rendered_horizon_ms=")
-                || !report.contains("repetition_score=")) {
+        if (!report.startsWith("{\"schema\":2,")
+                || !report.contains("\"guaranteedRenderedHorizonMs\":")
+                || !report.contains("\"repetitionScore\":")) {
             throw new AssertionError("debug report missing diagnostics");
         }
     }

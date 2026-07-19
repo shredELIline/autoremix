@@ -6,7 +6,7 @@ final class TransitionStateMachine {
         IDLE,
         TARGET_SELECTED,
         PREPARING,
-        FALLBACK_READY,
+        CANDIDATE_READY,
         NEURAL_CANDIDATES_PENDING,
         ARMED,
         WAITING_FOR_ACTIVATION_BOUNDARY,
@@ -41,7 +41,7 @@ final class TransitionStateMachine {
         switch (state) {
             case TARGET_SELECTED: return 12;
             case PREPARING: return 36;
-            case FALLBACK_READY: return 68;
+            case CANDIDATE_READY: return 68;
             case NEURAL_CANDIDATES_PENDING: return 76;
             case ARMED: return 92;
             case WAITING_FOR_ACTIVATION_BOUNDARY:
@@ -70,20 +70,20 @@ final class TransitionStateMachine {
         state = State.PREPARING;
     }
 
-    synchronized void fallbackReady(boolean technicallyValid) {
+    synchronized void candidateReady(boolean technicallyValid) {
         require(State.PREPARING);
-        if (!technicallyValid) throw new IllegalStateException("invalid fallback candidate");
+        if (!technicallyValid) throw new IllegalStateException("invalid transition candidate");
         validCandidate = true;
-        state = State.FALLBACK_READY;
+        state = State.CANDIDATE_READY;
     }
 
     synchronized void neuralCandidatesPending() {
-        require(State.FALLBACK_READY);
+        require(State.CANDIDATE_READY);
         state = State.NEURAL_CANDIDATES_PENDING;
     }
 
     synchronized void arm(long boundary) {
-        require(State.FALLBACK_READY, State.NEURAL_CANDIDATES_PENDING);
+        require(State.CANDIDATE_READY, State.NEURAL_CANDIDATES_PENDING);
         if (!validCandidate) throw new IllegalStateException("cannot arm without valid candidate");
         if (boundary < 0L) throw new IllegalArgumentException("negative activation boundary");
         activationBoundary = boundary;
