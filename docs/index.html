@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080a10">
+  <meta name="description" content="AutoRemix is an on-device cross-platform engine for continuous, stem-aware music transitions.">
+  <link rel="canonical" href="https://shredELIline.github.io/autoremix/">
+  <meta property="og:title" content="AutoRemix — Transform songs, don't switch them">
+  <meta property="og:description" content="A shared deterministic audio core for seamless, private, on-device transitions.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://shredELIline.github.io/autoremix/">
+  <meta property="og:image" content="https://shredELIline.github.io/autoremix/assets/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <title>AutoRemix — Continuous music transitions</title>
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/site.css">
+  <script src="assets/site.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="AutoRemix home">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <span>AutoRemix</span>
+    </a>
+    <nav aria-label="Primary navigation">
+      <a href="#engine">Engine</a>
+      <a href="#apps">Apps</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#roadmap">Roadmap</a>
+    </nav>
+    <a class="header-cta" href="https://github.com/shredELIline/autoremix">View source <span aria-hidden="true">↗</span></a>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top">
+      <div class="hero-copy">
+        <div class="eyebrow"><span class="pulse-dot"></span> Local audio intelligence · open source</div>
+        <h1>Transform songs.<br><span>Don't switch them.</span></h1>
+        <p class="hero-lede">AutoRemix builds an intermediate musical scene. It keeps the strongest line continuous while drums, bass, harmony, and vocals hand off on independent timelines.</p>
+        <div class="hero-actions">
+          <a class="button primary" href="https://github.com/shredELIline/autoremix">Explore on GitHub <span aria-hidden="true">↗</span></a>
+          <a class="button secondary" href="architecture/TARGET_STATE.md">Read the architecture</a>
+        </div>
+        <ul class="trust-list" aria-label="Product properties">
+          <li><span>✓</span> On-device first</li>
+          <li><span>✓</span> No source uploads</li>
+          <li><span>✓</span> Android + iOS shells</li>
+        </ul>
+      </div>
+
+      <div class="transition-console" aria-label="Interactive stem transition timeline">
+        <div class="console-topline">
+          <div><span class="status-led"></span> Transition plan <b>ready</b></div>
+          <span class="tier-badge">TIER C · DETERMINISTIC</span>
+        </div>
+        <div class="track-pair">
+          <div><span>A</span><strong>Source scene</strong><small>02:18.420</small></div>
+          <div class="pair-route" aria-hidden="true"><i></i><i></i><i></i></div>
+          <div><span>B</span><strong>Target scene</strong><small>01:06.880</small></div>
+        </div>
+        <div class="stem-grid" id="stem-grid">
+          <div class="stem-label"><strong>Guitar</strong><small>anchor</small></div>
+          <div class="stem-lane anchor"><i class="source-a"></i><i class="generated"></i><i class="source-b"></i><b></b></div>
+          <div class="stem-label"><strong>Vocals</strong><small>original only</small></div>
+          <div class="stem-lane vocals"><i class="source-a"></i><i class="gap"></i><i class="source-b"></i><b></b></div>
+          <div class="stem-label"><strong>Drums</strong><small>phase aligned</small></div>
+          <div class="stem-lane drums"><i class="source-a"></i><i class="generated"></i><i class="source-b"></i><b></b></div>
+          <div class="stem-label"><strong>Bass</strong><small>harmonic handoff</small></div>
+          <div class="stem-lane bass"><i class="source-a"></i><i class="generated"></i><i class="source-b"></i><b></b></div>
+          <div class="stem-label"><strong>Atmosphere</strong><small>shared bed</small></div>
+          <div class="stem-lane atmosphere"><i class="source-a"></i><i class="generated"></i><i class="source-b"></i><b></b></div>
+        </div>
+        <label class="scrubber-label" for="transition-scrubber"><span id="scene-label">Source A arrangement</span><output id="scene-time">00:00</output></label>
+        <input id="transition-scrubber" type="range" min="0" max="1000" value="410" aria-describedby="scrubber-help">
+        <p id="scrubber-help" class="sr-only">Move through the bridge to inspect which source owns each stem.</p>
+        <div class="legend" aria-label="Timeline legend"><span><i class="a"></i>Source A</span><span><i class="g"></i>Procedural</span><span><i class="b"></i>Source B</span></div>
+      </div>
+    </section>
+
+    <section class="metric-strip" aria-label="Engine guarantees">
+      <div><strong>1</strong><span>master PCM clock</span></div>
+      <div><strong>0</strong><span>cloud dependencies</span></div>
+      <div><strong>3</strong><span>quality profile contracts</span></div>
+      <div><strong>N</strong><span>independent stem paths</span></div>
+    </section>
+
+    <section class="section intro" id="engine">
+      <div class="section-heading">
+        <p class="kicker">The engine</p>
+        <h2>A transition is a scene,<br>not a volume curve.</h2>
+      </div>
+      <p class="section-lede">A bounded search proposes layered bridges. Hard technical gates reject clicks, clipping, missing anchor coverage, and invalid vocal provenance before musical ranking begins.</p>
+      <div class="feature-grid">
+        <article class="feature feature-wide">
+          <span class="feature-number">01</span>
+          <h3>Choose the line worth keeping</h3>
+          <p>The director scores continuity, confidence, transients, harmonic stability, and foreground importance. The listener never has to select an anchor.</p>
+          <div class="anchor-orbit" aria-hidden="true"><span>guitar</span><span>drums</span><span>bass</span><span>pad</span><i>anchor</i></div>
+        </article>
+        <article class="feature">
+          <span class="feature-number">02</span>
+          <h3>Plan every stem</h3>
+          <p>Each line carries its own provenance and sample-accurate automation. A plan is rejected if its anchor drops out.</p>
+          <div class="mini-lanes" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+        </article>
+        <article class="feature">
+          <span class="feature-number">03</span>
+          <h3>Fail musically</h3>
+          <p>A deterministic end-of-track bridge is pinned first. Optional future models can improve it, never block playback.</p>
+          <div class="fallback-stack" aria-hidden="true"><i>approved cache</i><i>procedural bridge</i><i>aligned fallback</i></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section app-section" id="apps">
+      <div class="section-heading compact">
+        <p class="kicker">The apps</p>
+        <h2>Complex underneath.<br>Quiet on the surface.</h2>
+      </div>
+      <p class="section-lede">The C ABI is wired to both platform projects. Android currently keeps its proven Java Tier-C provider while native planning/rendering is ported; iOS uses the shared render bridge. Screenshot assets below come only from the Compose renderer.</p>
+      <div class="screenshot-grid">
+        <figure class="app-shot tall">
+          <img src="assets/screenshots/now-playing-dark.png" alt="AutoRemix now playing screen in dark mode" loading="lazy">
+          <figcaption><strong>Now playing</strong><span>Anchor and preparation state, without engineering noise.</span></figcaption>
+        </figure>
+        <figure class="app-shot">
+          <img src="assets/screenshots/library-dark.png" alt="AutoRemix local music library in dark mode" loading="lazy">
+          <figcaption><strong>Local library</strong><span>Scoped media access. No upload step.</span></figcaption>
+        </figure>
+        <figure class="app-shot">
+          <img src="assets/screenshots/transition-dark.png" alt="AutoRemix transition preparation screen in dark mode" loading="lazy">
+          <figcaption><strong>Transition readiness</strong><span>Guaranteed fallback first, better candidates when ready.</span></figcaption>
+        </figure>
+        <figure class="app-shot wide-shot">
+          <img src="assets/screenshots/queue-dark.png" alt="AutoRemix recommendation queue in dark mode" loading="lazy">
+          <figcaption><strong>Queue</strong><span>Vibe continuity, feedback, and viable future paths.</span></figcaption>
+        </figure>
+        <figure class="app-shot">
+          <img src="assets/screenshots/transition-in-progress-dark.png" alt="AutoRemix transition in progress screen in dark mode" loading="lazy">
+          <figcaption><strong>Transition in progress</strong><span>Independent stem handoffs keep the anchor continuous.</span></figcaption>
+        </figure>
+        <figure class="app-shot">
+          <img src="assets/screenshots/now-playing-light.png" alt="AutoRemix now playing screen in light mode" loading="lazy">
+          <figcaption><strong>Light theme</strong><span>The same focused transport in system light mode.</span></figcaption>
+        </figure>
+      </div>
+      <p class="screenshot-note" id="screenshot-note">Captured from the Compose screenshot harness on the Android API 37 emulator.</p>
+    </section>
+
+    <section class="section architecture-section" id="architecture">
+      <div class="section-heading compact">
+        <p class="kicker">Architecture</p>
+        <h2>Offline intelligence.<br>Realtime discipline.</h2>
+      </div>
+      <div class="architecture-map" role="img" aria-label="Offline analysis, candidate search, and rendering produce PCM blocks; a playback session and lock-free ring feed platform audio output">
+        <div class="arch-column control">
+          <span>CONTROL PLANE</span>
+          <div><b>Media decoder</b><small>Platform-native, local files</small></div>
+          <i></i>
+          <div><b>Analysis + stems</b><small>Versioned provider interfaces</small></div>
+          <i></i>
+          <div><b>Plan + offline render</b><small>Bounded candidates → quality gates</small></div>
+        </div>
+        <div class="arch-bridge">
+          <span>immutable plan</span><i></i><span>prepared PCM blocks</span>
+        </div>
+        <div class="arch-column realtime">
+          <span>REALTIME PLANE</span>
+          <div><b>Session clock</b><small>Pause, seek, Next epoch</small></div>
+          <i></i>
+          <div><b>SPSC ring</b><small>Preallocated, lock-free</small></div>
+          <i></i>
+          <div><b>Platform output</b><small>Oboe / AVAudioEngine</small></div>
+        </div>
+      </div>
+      <div class="architecture-rules">
+        <span>No allocation</span><span>No locks</span><span>No file I/O</span><span>No inference</span><span>No logging</span><span>No network</span>
+      </div>
+    </section>
+
+    <section class="section tiers-section" id="tiers">
+      <div class="section-heading compact">
+        <p class="kicker">Adaptive quality</p>
+        <h2>Use what the device can sustain.</h2>
+      </div>
+      <div class="tier-grid">
+        <article><div><span>A</span><small>Provider-ready</small></div><h3>Neural high-end</h3><p>Optional licensed separation and instrumental continuation after real device measurements.</p><ul><li>Multiple generated candidates</li><li>Learned embeddings</li><li>Technical gates still mandatory</li></ul></article>
+        <article><div><span>B</span><small>Provider-ready</small></div><h3>Hybrid mid-range</h3><p>Compact providers plus spectral morphing and a shorter bounded search.</p><ul><li>Resource-aware lookahead</li><li>Fewer expensive candidates</li><li>Aggressive cache reuse</li></ul></article>
+        <article class="active"><div><span>C</span><small>Implemented core</small></div><h3>Deterministic</h3><p>Phase-aware loops, WSOLA, procedural instrumental beds, and staged stem handoff.</p><ul><li>No model weights</li><li>Works fully offline</li><li>Guaranteed fallback path</li></ul></article>
+      </div>
+      <p class="honesty-note"><strong>Honest status:</strong> no neural weights ship today. “AI” is not used as a label for filters or heuristic DSP.</p>
+    </section>
+
+    <section class="section demo-section" id="demo">
+      <div class="section-heading compact">
+        <p class="kicker">Reproducible demo</p>
+        <h2>Hear the fixture,<br>inspect the source.</h2>
+      </div>
+      <p class="section-lede">These short clips are generated from equations in the repository. They contain no sampled song, voice, or model output.</p>
+      <div class="audio-grid">
+        <article><span>01</span><h3>Source A</h3><p>112 BPM · guitar anchor</p><audio controls preload="none" src="assets/audio/source-a.wav">Your browser does not support audio playback.</audio></article>
+        <article><span>02</span><h3>Source B</h3><p>118 BPM · target arrangement</p><audio controls preload="none" src="assets/audio/source-b.wav">Your browser does not support audio playback.</audio></article>
+        <article><span>03</span><h3>Procedural bridge</h3><p>Continuous anchor · staged handoff</p><audio controls preload="none" src="assets/audio/procedural-bridge.wav">Your browser does not support audio playback.</audio></article>
+        <article><span>04</span><h3>Combined</h3><p>A → bridge → B</p><audio controls preload="none" src="assets/audio/combined-demo.wav">Your browser does not support audio playback.</audio></article>
+      </div>
+      <p class="screenshot-note">Generated deterministically by <code>scripts/generate_audio_fixtures.py</code>. Assets are CC0; checksums and technical metrics are in the adjacent manifest.</p>
+    </section>
+
+    <section class="privacy-band">
+      <div><p class="kicker">Privacy by architecture</p><h2>Your library stays your library.</h2></div>
+      <div class="privacy-points"><p><span>01</span>Analysis runs on the device.</p><p><span>02</span>Source audio is never uploaded.</p><p><span>03</span>No account or backend is required.</p></div>
+    </section>
+
+    <section class="section roadmap-section" id="roadmap">
+      <div class="section-heading compact"><p class="kicker">Roadmap</p><h2>Measured progress,<br>not model theatre.</h2></div>
+      <ol class="roadmap">
+        <li class="done"><span>01</span><div><b>Shared deterministic core</b><small>Stem plans, anchor invariant, bounded search, evaluator, lifecycle, C ABI.</small></div></li>
+        <li class="current"><span>02</span><div><b>Platform vertical slices</b><small>Compose + Oboe integration and SwiftUI + AVAudioEngine bridge.</small></div></li>
+        <li><span>03</span><div><b>Device corpus and benchmarks</b><small>Click fixtures, memory, latency, battery, thermal, and underrun measurements.</small></div></li>
+        <li><span>04</span><div><b>Licensed provider experiments</b><small>Models only after code, weight, and dataset license review.</small></div></li>
+      </ol>
+    </section>
+
+    <section class="closing-cta">
+      <p class="kicker">Build with us</p>
+      <h2>One musical scene.<br>Then another.</h2>
+      <p>Read the invariants, run the deterministic core, and bring a measured improvement.</p>
+      <div class="hero-actions"><a class="button primary" href="https://github.com/shredELIline/autoremix">Open the repository <span aria-hidden="true">↗</span></a><a class="button secondary" href="https://github.com/shredELIline/autoremix/blob/main/CONTRIBUTING.md">Contributing guide</a></div>
+    </section>
+  </main>
+
+  <footer>
+    <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>AutoRemix</span></a>
+    <p>Open source under Apache-2.0 · on-device first</p>
+    <div><a href="https://github.com/shredELIline/autoremix/blob/main/SECURITY.md">Security</a><a href="https://github.com/shredELIline/autoremix/blob/main/MODEL_LICENSES.md">Model policy</a><a href="https://github.com/shredELIline/autoremix">GitHub</a></div>
+  </footer>
+</body>
+</html>

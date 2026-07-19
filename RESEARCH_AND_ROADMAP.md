@@ -1,31 +1,37 @@
-# Research basis and neural roadmap
+# Research basis and roadmap
 
-## Why 2.0 uses a shared PCM master
+## Current design
 
-Separate high-level media players have independent clocks and vendor implementations. AutoRemix 2.0
-therefore decodes ahead and performs every layer gain inside one sample timeline before one AudioTrack
-output. This removes start/mute/release commands from the audible transition path.
+AutoRemix uses one PCM timeline and one output clock. Independent stem events can start, stop, loop,
+filter, time-stretch, pitch-shift, widen, or morph without creating independent player clocks. The
+director chooses an anchor from the analyzed material; it is not hard-coded to vocals.
 
-## Why stems change the product
+The shared C++ core exposes a versioned C ABI, deterministic fallback ladder, lifecycle state machine,
+bounded SPSC ring, procedural bridge renderer, and output diagnostics. Android currently feeds the
+native Oboe output from its retained Java Tier C renderer. iOS connects the C++ renderer to an
+`AVAudioSourceNode` but does not yet include a local media decoder.
 
-A coherent remix is not a crossfade between two mastered songs. It is a role exchange. The engine
-needs separately controllable lead, drums, bass, and backing so one anchor can stay audible while the
-arrangement underneath it changes. The current separator combines harmonic/percussive masking and
-stereo center/side information while keeping the four outputs complementary.
+## Why stems matter
 
-## Neural upgrade path
+A transition is an arrangement change, not only a master-bus crossfade. Separately controlled musical
+roles let one viable anchor remain audible while rhythm, harmony, bass, texture, and lead responsibilities
+move at musically useful points. Every automatic path still has a non-silent, bounded fallback.
 
-A production neural option should implement the same StemProvider contract and return the same four
-roles. Candidate runtimes are LiteRT or ONNX Runtime Mobile. A compact quantized/streaming separator
-is preferable to shipping a desktop-sized Hybrid Transformer Demucs model directly in the APK.
-The model must be benchmarked on representative Android devices for RAM, thermal throttling, latency,
-and stem leakage before becoming the default.
+## Priority work
 
-## Further product work
+1. Make the C++ renderer the Android end-to-end scene source; add parity fixtures at the Java/native boundary.
+2. Add Android audio-focus, noisy-route, interruption, and device-level underrun tests.
+3. Add iOS media-library decode/cache coordination; verify builds, background work, remote controls,
+   interruptions, and routes on macOS and physical devices.
+4. Measure named phones for latency, memory, battery, thermals, cache size, and sustained playback.
+5. Harden the persisted analysis cache with corrupt-record, schema-invalidation, restart, and
+   storage-budget eviction tests.
 
-- device-specific performance profiling and adaptive render quality;
-- persistent analysis metadata so the second session starts immediately;
-- richer phrase/downbeat segmentation and chorus/verse structure;
-- user feedback learning for preferred energy arcs and layer narratives;
-- an authorised streaming-source interface for a later Yandex Music integration;
-- optional export only after explicit user action and licensing review.
+## Optional neural tier
+
+Keep a neural separator or generator behind the existing provider boundary. Select a mobile runtime and
+model only after license provenance, download consent, checksum verification, RAM, latency, thermal,
+leakage, and fallback behavior are measured. Do not make network access or a model download mandatory.
+
+Later work may add richer phrase/downbeat structure, preference learning from explicit feedback, and
+authorized source adapters. Export and streaming integrations require separate product and licensing review.

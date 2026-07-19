@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "commit": "b116ed0c483c277aea4f6c9ca8f8d1bd277bbc58",
+  "measured_at_utc": "2026-07-19T05:35:47Z",
+  "host": {
+    "cpu": "AMD Ryzen AI 9 HX 370",
+    "logical_cpus": 24,
+    "os": "Docker on WSL2 Linux 6.6.87.2",
+    "architecture": "x86_64",
+    "docker_server": "29.0.1"
+  },
+  "toolchain": {
+    "container": "Alpine 3.22",
+    "compiler": "GCC 14.2",
+    "cmake": "3.31.7",
+    "build_type": "Release",
+    "sanitizers": false
+  },
+  "workload": {
+    "sample_rate_hz": 48000,
+    "channels": 2,
+    "duration_seconds": 4.0,
+    "iterations": 7
+  },
+  "result": {
+    "median_render_ms": 253.9599,
+    "median_realtime_factor": 0.0635,
+    "output_samples": 384000,
+    "peak": 0.1816,
+    "fallback_stage": 2,
+    "fallback_name": "deterministic_multi_stem"
+  }
+}
