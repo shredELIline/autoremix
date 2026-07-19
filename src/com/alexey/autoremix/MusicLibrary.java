@@ -6,11 +6,13 @@ import android.content.Context;
 import android.database.Cursor;
 import android.net.Uri;
 import android.provider.MediaStore;
+import android.util.Log;
 
 import java.util.ArrayList;
 import java.util.List;
 
 final class MusicLibrary {
+    private static final String TAG = "AutoRemixLibrary";
     private MusicLibrary() {}
 
     static List<Track> scan(Context context) {
@@ -42,9 +44,10 @@ final class MusicLibrary {
                 result.add(new Track(id, uri, cursor.getString(titleCol), cursor.getString(artistCol),
                         duration, cursor.getString(mimeCol)));
             }
-        } catch (SecurityException ignored) {
-            throw ignored;
-        } catch (Throwable ignored) {
+        } catch (SecurityException denied) {
+            throw denied;
+        } catch (RuntimeException error) {
+            Log.w(TAG, "event=scan_failed reason=" + error.getClass().getSimpleName(), error);
         }
         return result;
     }

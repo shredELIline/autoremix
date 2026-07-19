@@ -29,8 +29,8 @@ final class SceneRenderer {
                                             TrackAnalysis.Fragment fragment, long startMs,
                                             long durationMs, String reason) throws Exception {
         long available = Math.max(0L, track.durationMs - startMs - 1_000L);
-        long requested = Math.max(8_000L, Math.min(durationMs, available));
-        if (requested < 8_000L) throw new IllegalStateException("track ended");
+        if (available < 8_000L) throw new IllegalStateException("track ended");
+        long requested = Math.min(durationMs, available);
         PcmAudio decoded = PcmDecoder.decode(context, track, startMs, requested, PROCESS_RATE);
         float[] programme = decoded.stereo.clone();
         applyProgramGain(programme, analysis.loudnessDb);
@@ -61,6 +61,7 @@ final class SceneRenderer {
         int soloFrames = Math.min(aProgramme.frames(), msToFrames(soloMs));
         int transitionFrames = Math.min(msToFrames(transitionMs), aProgramme.frames() - soloFrames);
         if (transitionFrames < PROCESS_RATE * 12) throw new IllegalStateException("short decoded transition");
+        long renderedTransitionMs = Math.round(transitionFrames * 1000.0 / PROCESS_RATE);
         PcmAudio aTransition = aProgramme.sliceFrames(soloFrames, transitionFrames);
 
         long bInputMs = Math.round(transitionMs * plan.tempoRatio) + 2_000L;
@@ -93,14 +94,15 @@ final class SceneRenderer {
             anchorTrack = aTrack;
             anchorAnalysis = aAnalysis;
             anchorFragment = aFragment;
-            anchorPosition = aPositionMs + soloMs + transitionMs;
+            anchorPosition = Math.min(aTrack.durationMs - 1_000L,
+                    aPositionMs + Math.round(soloFrames * 1000.0 / PROCESS_RATE) + renderedTransitionMs);
         } else {
             anchorTrack = bTrack;
             anchorAnalysis = bAnalysis;
             anchorFragment = bFragment;
             long phaseSourceMs = Math.round(phase.skippedFrames * 1000.0
                     / PROCESS_RATE * plan.tempoRatio);
-            long consumedSourceMs = Math.round(transitionMs * plan.tempoRatio) + phaseSourceMs;
+            long consumedSourceMs = Math.round(renderedTransitionMs * plan.tempoRatio) + phaseSourceMs;
             anchorPosition = Math.min(bTrack.durationMs - 2_000L, bStart + consumedSourceMs);
         }
         String title = aTrack.displayName() + "  ×  " + bTrack.displayName();
@@ -109,6 +111,43 @@ final class SceneRenderer {
                 + "% · single PCM master";
         return new RenderedScene(output, anchorTrack, anchorAnalysis, anchorFragment,
                 anchorPosition, title, description, true);
+    }
+
+    /** Guaranteed last-resort bridge. It is bounded, equal-power, normalized and never cuts PCM. */
+    static RenderedScene renderEmergencyCrossfade(Context context,
+                                                   Track aTrack, TrackAnalysis aAnalysis,
+                                                   TrackAnalysis.Fragment aFragment, long aPositionMs,
+                                                   Track bTrack, TrackAnalysis bAnalysis,
+                                                   TrackAnalysis.Fragment bFragment,
+                                                   long durationMs) throws Exception {
+        long bridgeMs = Math.max(6_000L, Math.min(12_000L, durationMs));
+        long aStart = Math.max(0L, Math.min(aPositionMs,
+                Math.max(0L, aTrack.durationMs - bridgeMs - 1_000L)));
+        long bStart = Math.max(0L, Math.min(bFragment.cueMs,
+                Math.max(0L, bTrack.durationMs - bridgeMs - 1_000L)));
+        PcmAudio a = PcmDecoder.decode(context, aTrack, aStart, bridgeMs, PROCESS_RATE);
+        PcmAudio b = PcmDecoder.decode(context, bTrack, bStart, bridgeMs, PROCESS_RATE);
+        applyProgramGain(a.stereo, aAnalysis.loudnessDb);
+        applyProgramGain(b.stereo, bAnalysis.loudnessDb);
+        int frames = Math.min(a.frames(), b.frames());
+        if (frames < PROCESS_RATE * 2) throw new IllegalStateException("no emergency bridge audio");
+        float[] mixed = new float[frames * 2];
+        for (int frame = 0; frame < frames; frame++) {
+            float p = frame / (float) Math.max(1, frames - 1);
+            float gainA = (float) Math.cos(p * Math.PI * .5);
+            float gainB = (float) Math.sin(p * Math.PI * .5);
+            int sample = frame * 2;
+            mixed[sample] = a.stereo[sample] * gainA + b.stereo[sample] * gainB;
+            mixed[sample + 1] = a.stereo[sample + 1] * gainA + b.stereo[sample + 1] * gainB;
+        }
+        MasteringChain.processInPlace(mixed, PROCESS_RATE);
+        PcmAudio output = PcmDecoder.resample(new PcmAudio(PROCESS_RATE, mixed), OUTPUT_RATE);
+        MasteringChain.applyEdgeSafety(output.stereo, OUTPUT_RATE, 8);
+        long consumedB = Math.round(frames * 1000.0 / PROCESS_RATE);
+        return new RenderedScene(output, bTrack, bAnalysis, bFragment,
+                Math.min(bTrack.durationMs - 1_000L, bStart + consumedB),
+                aTrack.displayName() + "  ×  " + bTrack.displayName(),
+                "Guaranteed click-free fallback · equal-power PCM bridge", true);
     }
 
     private static PcmAudio fitLength(PcmAudio input, int targetFrames) {
