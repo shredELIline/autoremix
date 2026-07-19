@@ -4,6 +4,98 @@ package com.alexey.autoremix;
 final class LayerTransitionMixer {
     private LayerTransitionMixer() {}
 
+    static PcmAudio mix(StemBundle a, StemBundle b,
+                        ContinuousSceneTransitionPlan plan) {
+        return mix(a, b, plan, a == null ? 0 : a.sampleRate);
+    }
+
+    static PcmAudio mix(StemBundle a, StemBundle b,
+                        ContinuousSceneTransitionPlan plan, int planSampleRate) {
+        if (a == null || b == null || plan == null || a.sampleRate != b.sampleRate) {
+            throw new IllegalArgumentException("prepared A/B stems and plan are required");
+        }
+        if (planSampleRate <= 0) throw new IllegalArgumentException("planSampleRate");
+        long plannedFrames = Math.round((plan.landingSample - plan.activationSample)
+                * a.sampleRate / (double) planSampleRate);
+        int frames = (int) Math.min(Math.min(a.frames(), b.frames()), plannedFrames);
+        if (frames <= 0) return new PcmAudio(a.sampleRate, new float[0]);
+        float[] out = new float[frames * 2];
+        int timelineCount = plan.stemTimelines.size();
+        float[] lowpassLeft = new float[timelineCount];
+        float[] lowpassRight = new float[timelineCount];
+        for (int frame = 0; frame < frames; frame++) {
+            long sample = plan.activationSample
+                    + Math.round(frame * planSampleRate / (double) a.sampleRate);
+            float left = 0f;
+            float right = 0f;
+            float sourceA = 0f;
+            float sourceB = 0f;
+            float generated = 0f;
+            for (int index = 0; index < timelineCount; index++) {
+                ContinuousSceneTransitionPlan.StemTimeline timeline =
+                        plan.stemTimelines.get(index);
+                float gain = timeline.gainAt(sample);
+                if (gain <= 0f) continue;
+                float inputLeft;
+                float inputRight;
+                if (timeline.source == ContinuousSceneTransitionPlan.Source.GENERATED) {
+                    if (timeline.semanticRole.isVocal()) continue;
+                    double phase = 2.0 * Math.PI * (timeline.semanticRole
+                            == ContinuousSceneTransitionPlan.SemanticRole.BASS ? 55.0 : 220.0)
+                            * frame / a.sampleRate;
+                    inputLeft = inputRight = (float) Math.sin(phase) * .035f;
+                } else {
+                    StemBundle stems = timeline.source
+                            == ContinuousSceneTransitionPlan.Source.A ? a : b;
+                    int sourceSample = frame * 2;
+                    if (timeline.semanticRole
+                            == ContinuousSceneTransitionPlan.SemanticRole.FULL_MIX) {
+                        inputLeft = stems.lead[sourceSample] + stems.drums[sourceSample]
+                                + stems.bass[sourceSample] + stems.backing[sourceSample];
+                        inputRight = stems.lead[sourceSample + 1] + stems.drums[sourceSample + 1]
+                                + stems.bass[sourceSample + 1] + stems.backing[sourceSample + 1];
+                    } else {
+                        float[] source = sourceSamples(stems, timeline.semanticRole);
+                        inputLeft = source[sourceSample];
+                        inputRight = source[sourceSample + 1];
+                    }
+                }
+                float width = Math.max(0f, timeline.widthEnvelope.valueAt(sample));
+                float mid = (inputLeft + inputRight) * .5f;
+                float side = (inputLeft - inputRight) * .5f * width;
+                inputLeft = mid + side;
+                inputRight = mid - side;
+                float cutoff = Math.max(40f, Math.min(a.sampleRate * .49f,
+                        timeline.filterEnvelope.valueAt(sample)));
+                float alpha = 1f - (float) Math.exp(-2.0 * Math.PI * cutoff / a.sampleRate);
+                lowpassLeft[index] += (inputLeft - lowpassLeft[index]) * alpha;
+                lowpassRight[index] += (inputRight - lowpassRight[index]) * alpha;
+                float eqGain = (float) Math.pow(10.0,
+                        timeline.eqEnvelope.valueAt(sample) / 20.0);
+                float transientGain = Math.max(0f,
+                        timeline.transientEnvelope.valueAt(sample));
+                float morph = Math.max(0f, Math.min(1f,
+                        (timeline.harmonicMorphEnvelope.valueAt(sample)
+                                + timeline.timbreMorphEnvelope.valueAt(sample)) * .5f));
+                float pan = Math.max(-1f, Math.min(1f,
+                        timeline.panEnvelope.valueAt(sample)));
+                float leftPan = (float) Math.sqrt((1f - pan) * .5f) * 1.4142135f;
+                float rightPan = (float) Math.sqrt((1f + pan) * .5f) * 1.4142135f;
+                float processedGain = gain * eqGain * transientGain * (1f - .04f * morph);
+                left += lowpassLeft[index] * processedGain * leftPan;
+                right += lowpassRight[index] * processedGain * rightPan;
+                if (timeline.source == ContinuousSceneTransitionPlan.Source.A) sourceA += gain;
+                else if (timeline.source == ContinuousSceneTransitionPlan.Source.B) sourceB += gain;
+                else generated += gain;
+            }
+            float deckPower = sourceA * sourceA + sourceB * sourceB + generated * generated;
+            float headroom = deckPower > 16f ? 4f / (float) Math.sqrt(deckPower) : 1f;
+            out[frame * 2] = left * headroom;
+            out[frame * 2 + 1] = right * headroom;
+        }
+        return new PcmAudio(a.sampleRate, out);
+    }
+
     static PcmAudio mix(StemBundle a, StemBundle b, LayerPlan plan) {
         int frames = Math.min(a.frames(), b.frames());
         float[] out = new float[frames * 2];
@@ -49,68 +141,69 @@ final class LayerTransitionMixer {
         Gains g = new Gains();
         switch (type) {
             case VOCAL_ANCHOR_BACKING_MORPH:
-                g.aLead = out(p, .72f, 1f);
+                g.aLead = out(p, .72f, .84f);
                 g.aDrums = out(p, .12f, .58f);
                 g.aBass = out(p, .28f, .68f);
                 g.aBacking = out(p, .08f, .64f);
                 g.bDrums = in(p, .05f, .48f);
                 g.bBacking = in(p, .12f, .60f);
                 g.bBass = in(p, .38f, .72f);
-                g.bLead = in(p, .76f, 1f);
+                g.bLead = in(p, .90f, 1f);
                 break;
             case GROOVE_ANCHOR_LEAD_RELAY:
-                g.aLead = out(p, .18f, .56f);
+                g.aLead = out(p, .18f, .40f);
                 g.aDrums = out(p, .66f, 1f);
                 g.aBass = out(p, .58f, .92f);
                 g.aBacking = out(p, .45f, .82f);
-                g.bLead = in(p, .16f, .55f);
+                g.bLead = in(p, .58f, .78f);
                 g.bBacking = in(p, .48f, .82f);
                 g.bBass = in(p, .62f, .94f);
                 g.bDrums = in(p, .70f, 1f);
                 break;
             case DRUM_BRIDGE_TAKEOVER:
-                g.aLead = out(p, .58f, .90f);
+                g.aLead = out(p, .58f, .72f);
                 g.aDrums = out(p, .48f, .82f);
                 g.aBass = out(p, .35f, .72f);
                 g.aBacking = out(p, .24f, .74f);
                 g.bDrums = in(p, .05f, .36f);
                 g.bBacking = in(p, .28f, .66f);
                 g.bBass = in(p, .43f, .76f);
-                g.bLead = in(p, .66f, .96f);
+                g.bLead = in(p, .82f, .96f);
                 break;
             case HARMONIC_BED_TAKEOVER:
-                g.aLead = out(p, .50f, .84f);
+                g.aLead = out(p, .50f, .64f);
                 g.aBacking = out(p, .42f, .88f);
                 g.aBass = out(p, .40f, .78f);
                 g.aDrums = out(p, .54f, .92f);
                 g.bBacking = in(p, .04f, .54f);
-                g.bLead = in(p, .48f, .84f);
+                g.bLead = in(p, .72f, .84f);
                 g.bBass = in(p, .52f, .84f);
                 g.bDrums = in(p, .60f, .96f);
                 break;
             case BASS_GROOVE_MORPH:
-                g.aLead = out(p, .55f, .90f);
+                g.aLead = out(p, .55f, .68f);
                 g.aDrums = out(p, .36f, .72f);
                 g.aBass = out(p, .22f, .62f);
                 g.aBacking = out(p, .50f, .88f);
                 g.bBass = in(p, .20f, .62f);
                 g.bDrums = in(p, .34f, .74f);
                 g.bBacking = in(p, .48f, .86f);
-                g.bLead = in(p, .67f, .96f);
+                g.bLead = in(p, .78f, .96f);
                 break;
             case ATMOSPHERE_CHAIN:
-                g.aLead = out(p, .50f, .82f);
+                g.aLead = out(p, .50f, .64f);
                 g.aDrums = out(p, .30f, .68f);
                 g.aBass = out(p, .32f, .70f);
                 g.aBacking = out(p, .58f, .94f);
                 g.bBacking = in(p, .04f, .62f);
-                g.bLead = in(p, .52f, .86f);
+                g.bLead = in(p, .74f, .86f);
                 g.bBass = in(p, .58f, .90f);
                 g.bDrums = in(p, .64f, .98f);
                 break;
             case VOCAL_GUEST_RETURN: {
-                float guest = window(p, .18f, .70f, .15f);
-                g.aLead = 1f - guest * .52f;
+                float guest = window(p, .30f, .60f, .12f);
+                float aVocalCut = window(p, .14f, .78f, .12f);
+                g.aLead = 1f - aVocalCut;
                 g.aDrums = 1f;
                 g.aBass = 1f;
                 g.aBacking = 1f - guest * .14f;
@@ -134,12 +227,12 @@ final class LayerTransitionMixer {
             }
             case MELODY_RELAY_TAKEOVER:
             default:
-                g.aLead = out(p, .44f, .82f);
+                g.aLead = out(p, .44f, .58f);
                 g.aBacking = out(p, .24f, .76f);
                 g.aBass = out(p, .38f, .76f);
                 g.aDrums = out(p, .52f, .92f);
                 g.bBacking = in(p, .06f, .50f);
-                g.bLead = in(p, .42f, .80f);
+                g.bLead = in(p, .68f, .80f);
                 g.bBass = in(p, .50f, .84f);
                 g.bDrums = in(p, .62f, .98f);
                 break;
@@ -159,6 +252,22 @@ final class LayerTransitionMixer {
             out[frame] = Math.min(1f, env * 4.2f);
         }
         return out;
+    }
+
+    private static float[] sourceSamples(
+            StemBundle stems, ContinuousSceneTransitionPlan.SemanticRole role) {
+        switch (role) {
+            case LEAD_VOCAL:
+            case VOCAL_TEXTURE:
+                return stems.lead;
+            case DRUMS:
+            case PERCUSSION:
+                return stems.drums;
+            case BASS:
+                return stems.bass;
+            default:
+                return stems.backing;
+        }
     }
 
     private static float in(float p, float start, float end) {

@@ -27,7 +27,35 @@ public final class LayerContinuitySmokeTest {
             assertClose(type + " must finish on its declared anchor", last, expected, .002f);
             checked++;
         }
+        verifySingleLeadOwner(rate, frames);
         System.out.println("Layer continuity/endpoints OK for " + checked + " narratives");
+    }
+
+    private static void verifySingleLeadOwner(int rate, int frames) {
+        float[] silence = constant(frames, 0f);
+        float[] leadA = new float[frames * 2];
+        float[] leadB = new float[frames * 2];
+        for (int frame = 0; frame < frames; frame++) {
+            leadA[frame * 2] = .1f;
+            leadB[frame * 2 + 1] = .1f;
+        }
+        StemBundle a = new StemBundle(rate, leadA, silence, silence, silence);
+        StemBundle b = new StemBundle(rate, leadB, silence, silence, silence);
+        float audible = .01f; // -40 dBFS
+        float silent = .001f; // -60 dBFS
+        for (LayerPlan.Type type : LayerPlan.Type.values()) {
+            PcmAudio mixed = LayerTransitionMixer.mix(
+                    a, b, new LayerPlan(type, 16, .9f, 1f, "vocal-owner-test"));
+            for (int frame = 0; frame < mixed.frames(); frame++) {
+                float vocalA = Math.abs(mixed.stereo[frame * 2]);
+                float vocalB = Math.abs(mixed.stereo[frame * 2 + 1]);
+                if ((vocalA > audible && vocalB > silent)
+                        || (vocalB > audible && vocalA > silent)) {
+                    throw new AssertionError(type + " overlaps lead owners at frame " + frame
+                            + ": A=" + vocalA + " B=" + vocalB);
+                }
+            }
+        }
     }
 
     private static void assertClose(String label, float actual, float expected, float tolerance) {
