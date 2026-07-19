@@ -1,0 +1,34 @@
+{
+  "sha256": "85ca96ffabd1fe9dfcdedea5288d8078f041005fc1dbbff3aee09ca7ce92e276",
+  "frames": 1152000,
+  "sample_rate": 48000,
+  "channels": 2,
+  "peak": 0.4906341,
+  "dc_offset": 1.7386e-05,
+  "max_derivative": 0.3249839,
+  "rms_dbfs": -21.5636,
+  "activation": {
+    "activationSample": 288000,
+    "activationGapMs": 0.0,
+    "activationUnderruns": 0,
+    "activationMaxSampleJump": 0.00592923,
+    "activationMaxDerivativeJump": 3.185e-05,
+    "activationLufsJump": 0.077938,
+    "activationSpectralFluxSpike": 0.000161
+  },
+  "landing": {
+    "activationSample": 864000,
+    "activationGapMs": 0.0,
+    "activationUnderruns": 0,
+    "activationMaxSampleJump": 0.00314319,
+    "activationMaxDerivativeJump": 3.202e-05,
+    "activationLufsJump": 0.063236,
+    "activationSpectralFluxSpike": 0.000309
+  },
+  "thresholds": {
+    "maxSampleJump": 0.12,
+    "maxDerivativeJump": 0.16,
+    "maxLufsJump": 3.0,
+    "maxSpectralFluxSpike": 0.35
+  }
+}

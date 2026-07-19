@@ -2,44 +2,34 @@
   "generator": "scripts/generate_audio_fixtures.py",
   "files": {
     "source-a.wav": {
-      "sha256": "d36a797dc67e3d4bdbd4dbe93c2356d7353a95eb9a10fed2789bf1ac81f68cc6",
-      "frames": 132300,
-      "sample_rate": 22050,
+      "sha256": "3fd515d291c5e2f5ce6f7c3115b05b6e4efb86fcafd991d410a4939fbbb67667",
+      "frames": 288000,
+      "sample_rate": 48000,
       "channels": 2,
-      "peak": 0.4174201,
-      "dc_offset": 3.2261e-05,
-      "max_derivative": 0.3127063,
-      "rms_dbfs": -21.6835
+      "peak": 0.4579908,
+      "dc_offset": 3.1973e-05,
+      "max_derivative": 0.3121485,
+      "rms_dbfs": -21.1864
     },
     "source-b.wav": {
-      "sha256": "b254e9665ae94dff7ee90eb449504a1afe4138e376975336f81fd31cf738cf7f",
-      "frames": 132300,
-      "sample_rate": 22050,
+      "sha256": "ac2f6553cf118de9749e06b6952014b9e5f9beff24e9ff189c38f3a927b5d36d",
+      "frames": 288000,
+      "sample_rate": 48000,
       "channels": 2,
-      "peak": 0.4626386,
-      "dc_offset": 0.000128922,
-      "max_derivative": 0.3413703,
-      "rms_dbfs": -22.2459
+      "peak": 0.4983735,
+      "dc_offset": 0.000129893,
+      "max_derivative": 0.3499098,
+      "rms_dbfs": -21.7275
     },
-    "procedural-bridge.wav": {
-      "sha256": "52e177127c6d6e0410f314df988f28140794ec9703bd8d285221ee403a637937",
-      "frames": 264600,
-      "sample_rate": 22050,
+    "continuous-stem-scene.wav": {
+      "sha256": "85ca96ffabd1fe9dfcdedea5288d8078f041005fc1dbbff3aee09ca7ce92e276",
+      "frames": 1152000,
+      "sample_rate": 48000,
       "channels": 2,
-      "peak": 0.4500845,
-      "dc_offset": 6.1641e-05,
-      "max_derivative": 0.2649202,
-      "rms_dbfs": -19.7808
-    },
-    "combined-demo.wav": {
-      "sha256": "ac3dcae300a26fedc6abe2a38c0e30efe392b268bbb142e1f9600f8a0bd0eb7d",
-      "frames": 529200,
-      "sample_rate": 22050,
-      "channels": 2,
-      "peak": 0.4626386,
-      "dc_offset": 7.1116e-05,
-      "max_derivative": 0.3413703,
-      "rms_dbfs": -20.7335
+      "peak": 0.4906341,
+      "dc_offset": 1.7386e-05,
+      "max_derivative": 0.3249839,
+      "rms_dbfs": -21.5636
     }
   }
 }

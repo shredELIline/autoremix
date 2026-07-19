@@ -18,6 +18,14 @@ public final class LegacyDspSmokeTest {
         ContinuationPlannerSmokeTest.main(NO_ARGS);
     }
 
+    @Test public void continuousScenePlanner() {
+        ContinuousScenePlannerSmokeTest.main(NO_ARGS);
+    }
+
+    @Test public void continuousSceneEngine() {
+        ContinuousSceneEngineSmokeTest.main(NO_ARGS);
+    }
+
     @Test public void directorFuzz() {
         DirectorFuzzSmokeTest.main(NO_ARGS);
     }
@@ -28,6 +36,14 @@ public final class LegacyDspSmokeTest {
 
     @Test public void mastering() {
         MasteringSmokeTest.main(NO_ARGS);
+    }
+
+    @Test public void goldenContinuousScene() throws Exception {
+        GoldenContinuousSceneSmokeTest.main(NO_ARGS);
+    }
+
+    @Test public void masterAudioGraph() {
+        MasterAudioGraphSmokeTest.main(NO_ARGS);
     }
 
     @Test public void stemReconstruction() {

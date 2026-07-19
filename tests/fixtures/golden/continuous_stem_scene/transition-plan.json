@@ -1,0 +1,181 @@
+{
+  "schema": 2,
+  "transitionId": 9001,
+  "sourceTrackId": 101,
+  "targetTrackId": 202,
+  "sourceStartSample": 0,
+  "targetLandingSample": 0,
+  "activationSample": 288000,
+  "landingSample": 864000,
+  "sampleRate": 48000,
+  "selectedStrategy": "PRESERVE_GUITAR",
+  "origin": "DETERMINISTIC",
+  "aiPlannerUsed": false,
+  "stemSeparatorUsed": true,
+  "fallbackReason": null,
+  "qualityScore": 0.93,
+  "confidence": 0.95,
+  "selectedAnchorSet": [
+    {
+      "semanticRole": "GUITAR",
+      "source": "A",
+      "confidence": 0.95
+    },
+    {
+      "semanticRole": "GUITAR",
+      "source": "B",
+      "confidence": 0.95
+    }
+  ],
+  "vocalOwnershipTimeline": "AAAAAA------BBBBBB",
+  "stemTimelines": [
+    {
+      "semanticRole": "LEAD_VOCAL",
+      "source": "A",
+      "gain": [
+        [
+          0.0,
+          1.0
+        ],
+        [
+          0.28,
+          0.0
+        ]
+      ],
+      "ownershipState": "TRACK_A"
+    },
+    {
+      "semanticRole": "LEAD_VOCAL",
+      "source": "B",
+      "gain": [
+        [
+          0.72,
+          0.0
+        ],
+        [
+          0.88,
+          1.0
+        ]
+      ],
+      "ownershipState": "TRACK_B"
+    },
+    {
+      "semanticRole": "GUITAR",
+      "source": "A",
+      "gain": [
+        [
+          0.0,
+          1.0
+        ],
+        [
+          0.62,
+          1.0
+        ],
+        [
+          0.92,
+          0.0
+        ]
+      ],
+      "ownershipState": "NONE"
+    },
+    {
+      "semanticRole": "GUITAR",
+      "source": "B",
+      "gain": [
+        [
+          0.5,
+          0.0
+        ],
+        [
+          0.85,
+          1.0
+        ]
+      ],
+      "ownershipState": "NONE"
+    },
+    {
+      "semanticRole": "DRUMS",
+      "source": "A",
+      "gain": [
+        [
+          0.18,
+          1.0
+        ],
+        [
+          0.56,
+          0.0
+        ]
+      ],
+      "ownershipState": "NONE"
+    },
+    {
+      "semanticRole": "DRUMS",
+      "source": "B",
+      "gain": [
+        [
+          0.12,
+          0.0
+        ],
+        [
+          0.5,
+          1.0
+        ]
+      ],
+      "ownershipState": "NONE"
+    },
+    {
+      "semanticRole": "BASS",
+      "source": "A",
+      "gain": [
+        [
+          0.34,
+          1.0
+        ],
+        [
+          0.64,
+          0.0
+        ]
+      ],
+      "ownershipState": "NONE"
+    },
+    {
+      "semanticRole": "BASS",
+      "source": "B",
+      "gain": [
+        [
+          0.42,
+          0.0
+        ],
+        [
+          0.7,
+          1.0
+        ]
+      ],
+      "ownershipState": "NONE"
+    },
+    {
+      "semanticRole": "ATMOSPHERE",
+      "source": "GENERATED",
+      "gain": [
+        [
+          0.24,
+          0.0
+        ],
+        [
+          0.36,
+          1.0
+        ],
+        [
+          0.68,
+          1.0
+        ],
+        [
+          0.82,
+          0.0
+        ]
+      ],
+      "ownershipState": "NONE"
+    }
+  ],
+  "generatedVocal": false
+}
