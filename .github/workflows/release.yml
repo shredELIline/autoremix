@@ -26,6 +26,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Require tag on main
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
+
       - name: Validate version tag
         run: python3 .github/scripts/validate_version.py --tag "$GITHUB_REF_NAME"
 
@@ -124,6 +129,8 @@ jobs:
             release/AutoRemix-android.apk \
             release/SHA256SUMS.txt \
             --verify-tag \
+            --fail-on-no-commits \
+            --generate-notes \
             --latest \
             --title "AutoRemix ${version}" \
             --notes "$notes"

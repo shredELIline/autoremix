@@ -2,14 +2,19 @@
 
 ## Current design
 
-AutoRemix uses one PCM timeline and one output clock. Independent stem events can start, stop, loop,
-filter, time-stretch, pitch-shift, widen, or morph without creating independent player clocks. The
-director chooses an anchor from the analyzed material; it is not hard-coded to vocals.
+AutoRemix uses one PCM timeline and one output clock. Independent stem events
+can start, stop, filter, time-stretch, pitch-shift, widen, or morph without
+creating independent player clocks. A source fragment plays once by default;
+one bounded repeat is permitted only inside a larger varied scene. The director
+chooses an anchor from analyzed material; it is not hard-coded to vocals.
 
-The shared C++ core exposes a versioned C ABI, deterministic fallback ladder, lifecycle state machine,
-bounded SPSC ring, procedural bridge renderer, and output diagnostics. Android currently feeds the
-native Oboe output from its retained Java Tier C renderer. iOS connects the C++ renderer to an
-`AVAudioSourceNode` but does not yet include a local media decoder.
+The shared C++ core exposes a versioned C ABI, exact progressive lifecycle,
+preprocessed continuation graph, bounded non-repeating planner, repetition
+evaluator, rolling PCM horizons, deterministic fallback ladder, SPSC ring,
+procedural bridge renderer, and output diagnostics. Android currently feeds the
+native Oboe output from its retained Java Tier C renderer. iOS connects the C++
+renderer to an `AVAudioSourceNode` but does not yet include a local media
+decoder.
 
 ## Why stems matter
 

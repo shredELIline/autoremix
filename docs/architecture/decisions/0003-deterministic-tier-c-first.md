@@ -13,9 +13,10 @@ device costs are recorded.
 ## Why
 
 The repository has no legally reviewed weights or device benchmarks. Calling
-the spectral separator AI would be false. Deterministic looping, WSOLA,
-phase-aligned overlap-add, granular instrumental continuation, and staged stem
-handoff provide a valid offline fallback on every supported device.
+the spectral separator AI would be false. Deterministic non-repeating graph
+continuation, WSOLA, phase-aligned overlap-add, granular instrumental texture,
+and staged stem handoff provide a valid offline fallback on every supported
+device.
 
 ## Consequences
 

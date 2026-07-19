@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.2.0 — Progressive non-repeating transitions
+
+- Removed indefinite anchor hold loops. Source material now plays once by
+  default and may repeat at most once inside a bounded varied scene.
+- Added the explicit transition lifecycle, natural runway, guarded musical
+  activation boundaries, stale-plan rejection, and deterministic end fallback.
+- Added versioned preprocessing descriptors, continuation graphs and
+  reservoirs, bounded 16–32 bar beam planning, repetition metrics, and rolling
+  committed/rendered/planning horizons.
+- Added Level 0/1/2 candidate contracts. Slow or failed neural work can only
+  improve uncommitted future audio and cannot block deterministic playback.
+- Integrated non-repeating continuation, low-watermark recovery, cancellation,
+  diagnostics, and anonymized report export into the Android provider.
+- Added state, repetition, buffer, click, cancellation, cache-corruption, and
+  90-second golden-scenario coverage. No neural model or weights are included.
+- Real-device latency, memory, battery, thermal, inference, and sustained
+  underrun benchmarks remain required and are not claimed by this release.
+
 ## 2.1.1 — Versioned APK delivery
 
 - Fixed the Android 37 CI package identifier used by release builds.

@@ -32,12 +32,23 @@ Planning uses bounded beam search. Each candidate contains:
 Generated provenance is invalid for vocal roles. Vocal chops may reference only
 fragments decoded from the two source tracks.
 
+Transition preparation and audible activation are separate. The minimum
+deterministic candidate is rendered first, then armed for a future musical
+boundary. A missed boundary advances to the next valid boundary without
+starting a hold loop.
+
+Every track exposes versioned 1/2/4/8-bar and phrase chunk banks, continuation
+graphs, entry/exit indexes, repetition fingerprints, and resumable preprocessing
+jobs. Planning keeps 2 committed bars immutable, at least 8 rendered bars
+playable, a 16–32 bar target, and 32–64 bars of lookahead. Expensive providers
+may improve only uncommitted future audio.
+
 ## Quality tiers
 
 - Tier A: optional licensed neural providers after device measurement.
 - Tier B: compact providers plus deterministic DSP after measurement.
-- Tier C: deterministic separation, looping, granular continuation, WSOLA,
-  phase alignment, and staged stem replacement.
+- Tier C: deterministic separation, non-repeating graph continuation, bounded
+  variation, WSOLA, phase alignment, and staged stem replacement.
 
 The application selects a tier from measured render throughput, memory,
 battery, and thermal signals. Network type never selects compute quality.

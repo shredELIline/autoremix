@@ -1,17 +1,17 @@
 # Implementation plan
 
-| Phase | Deliverable | Exit gate |
-| --- | --- | --- |
-| 0 | Audit, reproducible builds, ADRs | Baseline facts recorded; CI parses all targets |
-| 1 | Shared PCM core and C ABI | Host DSP tests pass; callback path allocates and locks zero times |
-| 2 | Versioned analysis/stem cache | Budget, LRU, pinning, corruption, and restart tests pass |
-| 3 | Independent stem planner | Anchor coverage, arbitrary points, vocal provenance, and beam-search tests pass |
-| 4 | Procedural bridge and evaluator | Every fixture passes finite/peak/DC/click hard gates |
-| 5 | Playback lifecycle and queue | Pause, seek epoch, EOF fallback, Next, rapid Next, and feedback tests pass |
-| 6 | Android integration | Debug APK and instrumented UI tests pass on CI/emulator |
-| 7 | iOS integration | Simulator build and tests pass on macOS CI |
-| 8 | Measured model spikes | License, checksum, size, RAM, latency, and device matrix committed |
-| 9 | Showcase and release | Renderer screenshots, demo licenses, SBOM, checksums, APK/AAB attached |
+| Phase | Status | Deliverable | Remaining exit gate |
+| --- | --- | --- | --- |
+| 0 | Complete | Audit, reproducible builds, ADRs | — |
+| 1 | Complete | Shared PCM core, C ABI, and SPSC output | — |
+| 2 | Partial | Versioned bounded analysis and preprocessing cache contracts | Persist and pin all native stem/chunk artifacts on both platforms |
+| 3 | Complete | Independent stem and non-repeating continuation planners | — |
+| 4 | Complete | Deterministic bridge, repetition evaluator, and click gates | — |
+| 5 | Complete | State machine, rolling horizons, cancellation, EOF fallback, and queue epochs | — |
+| 6 | Partial | Android app, Oboe output, unit/lint CI, screenshot harness, preview APK | Physical-device instrumentation and stable signing |
+| 7 | Partial | iOS target with simulator build/tests in macOS CI | Physical-device audio, background, interruption, and signing verification |
+| 8 | Pending | Measured provider/device spikes | Named-device latency, RAM, battery, thermal, inference, and underrun matrix |
+| 9 | Partial | Showcase, licensed fixtures, checksums, tagged preview APK | SBOM, signed AAB/IPA, reproducible-build comparison |
 
 Neural tiers are not release blockers. A deterministic Tier-C vertical slice is
 the first complete product path. A model may replace a component only after it

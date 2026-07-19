@@ -24,3 +24,8 @@ Run on Windows:
 ```
 
 Phone CPU, RAM, battery, thermal, inference, and underrun results are not available until measured on named devices.
+
+## Recorded host runs
+
+- [`2026-07-19-aab3136-docker-wsl2-x86_64.json`](2026-07-19-aab3136-docker-wsl2-x86_64.json) — progressive non-repeating core;
+- [`2026-07-19-docker-wsl2-x86_64.json`](2026-07-19-docker-wsl2-x86_64.json) — earlier shared-core baseline.

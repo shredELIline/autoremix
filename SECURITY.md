@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Only the latest `main` revision is supported before the first stable release.
+Only the latest published preview and the latest `main` revision are supported.
 
 ## Reporting
 

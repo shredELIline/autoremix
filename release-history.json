@@ -21,6 +21,13 @@
       "tag": "v2.1.1",
       "android": "debug-preview-apk",
       "ios": "source-only"
+    },
+    {
+      "version_name": "2.2.0",
+      "version_code": 11,
+      "tag": "v2.2.0",
+      "android": "debug-preview-apk",
+      "ios": "source-only"
     }
   ]
 }

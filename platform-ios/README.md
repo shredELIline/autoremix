@@ -101,10 +101,10 @@ file access, model inference, network work, or logging.
 
 ## Current verification status
 
-This scaffold was authored on Windows. Windows has no Xcode, iOS SDK, Simulator, `xcodebuild`, or
-code-signing toolchain. The project and relative paths were checked statically only. The macOS build,
-tests, background scheduling, remote controls, device audio, interruptions, and signing still need
-verification on macOS and physical iOS hardware.
+This target is edited from a Windows workspace, where Xcode is unavailable.
+GitHub Actions builds the Release simulator target and runs its tests on macOS.
+Physical-device audio, interruptions, background execution, archives, and
+signing still require verification on iOS hardware.
 
 The platform target does not yet provide a local media decoder/library coordinator or model runtime.
 No neural model, AI generation, model license, latency, battery, or quality claim is made here.

@@ -2,7 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-OUT="$ROOT/dist/AutoRemix-2.1.0-debug.apk"
+VERSION="$(awk -F= '$1 == "VERSION_NAME" { print $2 }' "$ROOT/version.properties")"
+test -n "$VERSION"
+OUT="$ROOT/dist/AutoRemix-${VERSION}-debug.apk"
 
 "$ROOT/gradlew" :platform-android:assembleDebug
 mkdir -p "$ROOT/dist"

@@ -37,6 +37,7 @@ Local, deterministic AutoDJ research app for Android and iOS. It plans independe
 
 | Version | Android | iOS | Source |
 | --- | --- | --- | --- |
+| [2.2.0](https://github.com/shredELIline/autoremix/releases/tag/v2.2.0) · code 11 | Preview APK | Source target | `v2.2.0` |
 | [2.1.1](https://github.com/shredELIline/autoremix/releases/tag/v2.1.1) · code 10 | Preview APK | Source target | `v2.1.1` |
 | [2.1.0](https://github.com/shredELIline/autoremix/releases/tag/v2.1.0) · code 9 | Source snapshot | Source target | `v2.1.0` |
 | [2.0.0](https://github.com/shredELIline/autoremix/releases/tag/v2.0.0) · code 8 | Historical source snapshot | — | `v2.0.0` |
@@ -206,7 +207,8 @@ Code is [Apache-2.0](LICENSE). Synthetic demo audio is [CC0](docs/assets/audio/L
 - No neural continuation provider, model, or weights are bundled. Neural upgrades remain an optional provider path.
 - Procedural generation creates short instrumental bridge texture; it is not full-song generation.
 - Real-device musical quality, battery, thermal behavior, and underruns still need a published device matrix.
-- The iOS project requires macOS/Xcode verification.
+- The iOS simulator target is verified by macOS CI; physical hardware and
+  signing still require verification.
 - Streaming-service integration is intentionally absent.
 
 ## Roadmap

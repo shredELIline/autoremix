@@ -93,7 +93,7 @@
         <p class="kicker">The engine</p>
         <h2>A transition is a scene,<br>not a volume curve.</h2>
       </div>
-      <p class="section-lede">A bounded search proposes layered bridges. Hard technical gates reject clicks, clipping, missing anchor coverage, and invalid vocal provenance before musical ranking begins.</p>
+      <p class="section-lede">A bounded search proposes layered bridges and non-repeating continuation. Hard technical gates reject clicks, clipping, stale repetition, missing anchor coverage, and invalid vocal provenance before musical ranking begins.</p>
       <div class="feature-grid">
         <article class="feature feature-wide">
           <span class="feature-number">01</span>
@@ -109,9 +109,9 @@
         </article>
         <article class="feature">
           <span class="feature-number">03</span>
-          <h3>Fail musically</h3>
-          <p>A deterministic end-of-track bridge is pinned first. Optional future models can improve it, never block playback.</p>
-          <div class="fallback-stack" aria-hidden="true"><i>approved cache</i><i>procedural bridge</i><i>aligned fallback</i></div>
+          <h3>Never hold on one loop</h3>
+          <p>Track A keeps its natural runway. A deterministic multi-block continuation is pinned before optional future models can improve it.</p>
+          <div class="fallback-stack" aria-hidden="true"><i>natural runway</i><i>continuation graph</i><i>aligned fallback</i></div>
         </article>
       </div>
     </section>
@@ -156,17 +156,17 @@
         <p class="kicker">Architecture</p>
         <h2>Offline intelligence.<br>Realtime discipline.</h2>
       </div>
-      <div class="architecture-map" role="img" aria-label="Offline analysis, candidate search, and rendering produce PCM blocks; a playback session and lock-free ring feed platform audio output">
+      <div class="architecture-map" role="img" aria-label="Offline preprocessing builds a continuation reservoir and rolling PCM horizons; an armed musical boundary and lock-free ring feed platform audio output">
         <div class="arch-column control">
           <span>CONTROL PLANE</span>
           <div><b>Media decoder</b><small>Platform-native, local files</small></div>
           <i></i>
-          <div><b>Analysis + stems</b><small>Versioned provider interfaces</small></div>
+          <div><b>Preprocess + reservoir</b><small>Versioned chunks and continuation graph</small></div>
           <i></i>
-          <div><b>Plan + offline render</b><small>Bounded candidates → quality gates</small></div>
+          <div><b>Plan + rolling render</b><small>Level 0 first → quality gates</small></div>
         </div>
         <div class="arch-bridge">
-          <span>immutable plan</span><i></i><span>prepared PCM blocks</span>
+          <span>armed boundary</span><i></i><span>guaranteed PCM horizon</span>
         </div>
         <div class="arch-column realtime">
           <span>REALTIME PLANE</span>
@@ -190,7 +190,7 @@
       <div class="tier-grid">
         <article><div><span>A</span><small>Provider-ready</small></div><h3>Neural high-end</h3><p>Optional licensed separation and instrumental continuation after real device measurements.</p><ul><li>Multiple generated candidates</li><li>Learned embeddings</li><li>Technical gates still mandatory</li></ul></article>
         <article><div><span>B</span><small>Provider-ready</small></div><h3>Hybrid mid-range</h3><p>Compact providers plus spectral morphing and a shorter bounded search.</p><ul><li>Resource-aware lookahead</li><li>Fewer expensive candidates</li><li>Aggressive cache reuse</li></ul></article>
-        <article class="active"><div><span>C</span><small>Implemented core</small></div><h3>Deterministic</h3><p>Phase-aware loops, WSOLA, procedural instrumental beds, and staged stem handoff.</p><ul><li>No model weights</li><li>Works fully offline</li><li>Guaranteed fallback path</li></ul></article>
+        <article class="active"><div><span>C</span><small>Implemented core</small></div><h3>Deterministic</h3><p>Non-repeating graph continuation, WSOLA, bounded variation, and staged stem handoff.</p><ul><li>No model weights</li><li>Works fully offline</li><li>Guaranteed PCM horizon</li></ul></article>
       </div>
       <p class="honesty-note"><strong>Honest status:</strong> no neural weights ship today. “AI” is not used as a label for filters or heuristic DSP.</p>
     </section>
@@ -219,8 +219,8 @@
       <div class="section-heading compact"><p class="kicker">Roadmap</p><h2>Measured progress,<br>not model theatre.</h2></div>
       <ol class="roadmap">
         <li class="done"><span>01</span><div><b>Shared deterministic core</b><small>Stem plans, anchor invariant, bounded search, evaluator, lifecycle, C ABI.</small></div></li>
-        <li class="current"><span>02</span><div><b>Platform vertical slices</b><small>Compose + Oboe integration and SwiftUI + AVAudioEngine bridge.</small></div></li>
-        <li><span>03</span><div><b>Device corpus and benchmarks</b><small>Click fixtures, memory, latency, battery, thermal, and underrun measurements.</small></div></li>
+        <li class="done"><span>02</span><div><b>Progressive platform slices</b><small>Compose + Oboe, SwiftUI + AVAudioEngine, rolling horizons, and non-repeating fallback.</small></div></li>
+        <li class="current"><span>03</span><div><b>Device corpus and benchmarks</b><small>Click fixtures, memory, latency, battery, thermal, and underrun measurements.</small></div></li>
         <li><span>04</span><div><b>Licensed provider experiments</b><small>Models only after code, weight, and dataset license review.</small></div></li>
       </ol>
     </section>

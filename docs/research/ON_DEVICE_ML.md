@@ -34,9 +34,9 @@ platform implementations. No provider is enabled in the release build.
 
 ### Instrumental continuation
 
-Default: deterministic phase-aware loop selection, overlap-add, granular
-texture, and staged harmonic/tempo adaptation. Generated provenance is allowed
-only for non-vocal roles.
+Default: deterministic non-repeating continuation graph, bounded variations,
+overlap-add, granular texture, and staged harmonic/tempo adaptation. Generated
+provenance is allowed only for non-vocal roles.
 
 Neural provider: not selected. Full-song generation is out of scope. A future
 provider may create only short instrumental bridge elements and must obey the

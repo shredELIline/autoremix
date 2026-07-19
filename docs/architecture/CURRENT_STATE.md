@@ -1,55 +1,51 @@
-# Current state audit
+# Current state
 
-Audit baseline: local root commit `5406113`. The linked GitHub repository had no
-commits or files when the audit began.
+Snapshot: `2.2.0` release candidate, 2026-07-19.
 
 ## Confirmed implementation
 
-- Android-only Java 17 source with raw Views and a foreground service.
-- MediaStore scan of local audio URIs.
-- MediaCodec window and segment decode.
-- Five-window heuristic BPM, key, onset, loudness, and role analysis.
-- One pre-rendered PCM programme feeding one Java `AudioTrack`.
-- WSOLA tempo adjustment and onset-envelope phase alignment.
-- Complementary four-role HPSS + mid/side decomposition.
-- Nine deterministic stem gain narratives.
-- DC blocking, soft limiting, scene-edge fades, and synthetic smoke tests.
+- Portable C++ audio core with a stable C ABI, deterministic bridge planner,
+  renderer, technical quality evaluator, lifecycle epochs, and SPSC PCM ring.
+- Exact progressive transition state machine. Target selection never starts
+  audible transition audio; activation requires a valid candidate and a future
+  musical boundary.
+- Versioned preprocessing representation with 1/2/4/8-bar and phrase chunks,
+  graph indexes, resumable chunk progress, embeddings, reusable conditioning,
+  bounded serialization, and corruption rejection.
+- Continuation reservoir, graph, bounded 16–32 bar beam planner, hard repetition
+  constraints, and arrangement novelty metrics.
+- Rolling 2-bar committed, 8-bar guaranteed, 16–32 bar rendered, and 32–64 bar
+  planning contracts. Optional neural results can replace only uncommitted
+  future PCM at a safe boundary.
+- Android Kotlin/Compose shell, WorkManager preprocessing, Media3 session,
+  retained Java deterministic provider, Oboe/AAudio output, and AudioTrack
+  fallback.
+- Android natural runway, instant Level 0 fallback, finite scene deque,
+  low-watermark recovery, rapid-Next coalescing, seek epochs, stale-plan
+  rejection, and anonymized diagnostic export.
+- iOS SwiftUI/AVAudioEngine target using the shared C ABI. macOS CI builds and
+  tests the simulator target.
+- Host, Android unit, deterministic fuzz, click, cancellation, cache, buffer,
+  and 90-second slow-generation tests.
 
 The separator is a deterministic spectral approximation. It is not a neural
 separator and does not yield studio-clean isolated stems.
 
 ## Confirmed gaps
 
-- No shared native core, Oboe/AAudio path, iOS target, Gradle project, or CI.
-- No explicit anchor or independent per-stem transition timelines.
-- No bounded candidate search or diagnostic quality evaluator.
-- No model providers, model weights, embeddings, instrument classifier, vocal
-  chops, or neural continuation.
-- No capability benchmark or adaptive tier selection.
-- No persistent cache, budget, LRU, pinning, or schema/model invalidation.
-- No seek-safe planning epoch, guaranteed end fallback, rapid-next coalescing,
-  likes/dislikes, or durable recommendation queue.
-- No WorkManager analysis, MediaSession controls, Compose UI, or screenshot
-  harness.
-- No automated boundary click detector or measured device benchmarks.
+- No neural continuation provider, model, or weights ship. Level 2 is a guarded
+  provider contract, not a performance claim.
+- Physical Android and iOS latency, memory, battery, thermal, inference, audio
+  interruption, and sustained-underrun measurements are not available.
+- Android publishes a CI-built debug-preview APK. Stable signing, Play-ready
+  AAB delivery, SBOM publication, and reproducible-build comparison remain.
+- The iOS target has no public IPA and still needs physical-device and signing
+  verification.
+- Android still uses the retained deterministic Java analysis/separation path;
+  full shared-core planning/render integration remains incremental.
 
-## Defects found
+## Release invariant
 
-- Short continuation requests can be forced to eight seconds after available
-  audio reaches zero, making the following guard unreachable.
-- Transition state can advance by the requested duration after decode returns a
-  shorter tail.
-- End-of-track incompatibility can stop playback instead of using a guaranteed
-  bridge.
-- Progress uses wall time, so pause can advance the displayed position.
-- Render failures are broadly caught and may retry without a bounded policy.
-- Whole-scene materialization and STFT matrices can exceed mobile memory
-  budgets on long scenes.
-- Several decode and library failures are swallowed.
-
-## Reuse decision
-
-Retain the FFT, WSOLA, beat-phase alignment, analysis heuristics, complementary
-separator, envelope shapes, and generated synthetic fixtures as a Tier-C
-fallback and porting reference. Replace the service-owned control flow,
-unbounded scene ownership, UI, output callback, cache, plan schema, and build.
+Playback must never wait on optional expensive generation by repeating one
+short musical fragment indefinitely. Natural source runway or pre-rendered,
+non-repeating deterministic continuation must remain available first.
