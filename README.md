@@ -37,6 +37,7 @@ Local, deterministic AutoDJ research app for Android and iOS. It plans independe
 
 | Version | Android | iOS | Source |
 | --- | --- | --- | --- |
+| [2.3.0](https://github.com/shredELIline/autoremix/releases/tag/v2.3.0) · code 12 | Preview APK | Source target | `v2.3.0` |
 | [2.2.0](https://github.com/shredELIline/autoremix/releases/tag/v2.2.0) · code 11 | Preview APK | Source target | `v2.2.0` |
 | [2.1.1](https://github.com/shredELIline/autoremix/releases/tag/v2.1.1) · code 10 | Preview APK | Source target | `v2.1.1` |
 | [2.1.0](https://github.com/shredELIline/autoremix/releases/tag/v2.1.0) · code 9 | Source snapshot | Source target | `v2.1.0` |
@@ -48,7 +49,7 @@ The machine-readable history is in [`release-history.json`](release-history.json
 
 A transition is an arrangement change, not two full mixes fading past each other. Each available role receives its own immutable timeline. The planner chooses one anchor and stages the remaining roles around it. Generated provenance is prohibited for vocals.
 
-Selecting Track B prepares decoded B material, deterministic stems, DSP state, and an immutable `ContinuousSceneTransitionPlan`. The same 48 kHz stereo master stream renders A stems, the hybrid scene, the clean-B landing, and the following B runway. No transition WAV, player switch, decoder startup, output restart, or ring reset occurs at activation.
+On Android, selecting Track B prepares decoded B material, deterministic stems, DSP state, and an immutable `ContinuousSceneTransitionPlan`. The same 48 kHz stereo master stream renders A stems, the hybrid scene, the clean-B landing, and the following B runway. No transition WAV, player switch, decoder startup, output restart, or ring reset occurs at activation.
 
 The continuation reservoir and graph provide distinct compatible fragments instead of one repeated hold loop. Planning excludes recent fragment IDs and melodic fingerprints, rejects infinite self-edges, and requires audible arrangement change across the continuation.
 
@@ -68,10 +69,10 @@ flowchart LR
   Plan --> Prepared["PreparedStemScene: per-stem envelopes and processors"]
   Prepared --> Master["Persistent MasterAudioGraph"]
   Master --> Ring["Preallocated SPSC ring"]
-  Ring --> Device["Oboe/AAudio or AVAudioEngine"]
+  Ring --> Device["Android Oboe/AAudio"]
 ```
 
-The primary Android path prepares a 16-bar stem handoff plus an 8-bar clean-B landing and queues a B runway before activation. If preparation is not valid, A continues and the transition is retried. Fallback order is legacy intelligent, phrase-aware, then basic crossfade. Every fallback carries a reason.
+The primary Android path prepares a 16-bar stem handoff plus an 8-bar clean-B landing and queues a B runway before activation. A missed readiness deadline keeps A playing and retries planning; other primary-path failures use legacy intelligent, phrase-aware, then basic crossfade. Every fallback carries a reason.
 
 The shared C++17 core provides sample-accurate automation, continuation planning, repetition evaluation, diagnostic quality gates, cache identities, lifecycle epochs, rapid-Next coalescing, and a stable C ABI. Audio callbacks only consume pre-rendered PCM from a preallocated lock-free ring. Preparation, logging, and candidate generation stay outside the callback.
 

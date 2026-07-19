@@ -1,16 +1,15 @@
-# AutoRemix 2.2.0 quality report
+# AutoRemix 2.3.0 quality report
 
 Verified on 2026-07-19 from the local commit series. The host was Windows 11 with Linux containers.
 
 ## Android build
 
 - package: `com.alexey.autoremix`
-- version: `2.2.0` (`versionCode=11`)
+- version: `2.3.0` (`versionCode=12`)
 - `minSdk=29`, `targetSdk=37`, `compileSdk=37`
 - `lintDebug`: 0 errors, 13 warnings
-- `testDebugUnitTest`: 9 passed, 0 failed
-- `assembleDebug`, `bundleDebug`, and `assembleDebugAndroidTest`: passed
-- Compose screenshot tests: 8 passed on the API 37 emulator at 1080 × 2400
+- `testDebugUnitTest`: 16 passed, 0 failed
+- `assembleDebug` and `bundleDebug`: passed
 
 The lint warnings are one tool-update notice, seven obsolete SDK guards, two
 resources used only by the screenshot harness, one idle/charging constraint
@@ -21,9 +20,8 @@ advisory. None are suppressed.
 
 | Artifact | Size | SHA-256 |
 | --- | ---: | --- |
-| `platform-android-debug.apk` | 72,264,471 bytes | `5fa8b1d089ecd4b977803fe42c5d4409787a43d7e4783505c3db1eb10375a2de` |
-| `platform-android-debug.aab` | 19,682,990 bytes | `f8f4b7bbf0c3291d013cc703baa5fc5cdf5e2c6c56810ccca014e5d5d780b507` |
-| `platform-android-debug-androidTest.apk` | 2,442,353 bytes | `4911559110a3fa26f7aa7798f2393e651ac0e417a1e17716be0a055ca56e2080` |
+| `platform-android-debug.apk` | 72,362,779 bytes | `ac7754ff336be62a4be4acdff9003820db4080c821f1e5a23660cd39080ed539` |
+| `platform-android-debug.aab` | 19,727,099 bytes | `ad52b410cda483012fba5c6c2f82f042d6bee5dbae1a7465a54e0efad4ced629` |
 
 These are debug artifacts. The APK uses APK Signature Scheme v2 and the standard `Android Debug`
 certificate. No release-signing or upgrade-certificate claim is made. Build outputs are ignored by Git.
@@ -36,13 +34,14 @@ certificate. No release-signing or upgrade-certificate claim is made. Build outp
 - Android NDK arm64 build and C ABI probe: passed
 - C ABI version: 2
 
-The test suite covers independent stem timelines, exact progressive lifecycle,
+The shared-core suite covers independent stem timelines, exact progressive lifecycle,
 fallback ordering, anchor continuity, continuation graphs, bounded non-repeating
 beam search, repetition quality, rolling horizons, future-only neural upgrades,
 ring-buffer behavior, cancellation, invalid/non-finite inputs, cache corruption,
 chunk boundaries, clicks, a 90-second slow-generation scenario, diagnostics,
-and the C boundary. It does not consume the committed demo WAV files as golden
-tests.
+and the C boundary. Android tests additionally cover structured stem planning,
+strict vocal ownership, exact 51-second graph activation, clean-B landing,
+fallback order, diagnostics, and committed golden scene audio.
 
 ### Host benchmark
 
@@ -73,13 +72,14 @@ no Xcode or iOS SDK, so no local iOS build or runtime result is claimed.
 - local documentation/link validator: passed
 - desktop and 390 × 844 mobile Playwright checks: passed with zero console errors
 - synthetic CC0 demo WAV generation is deterministic and records checksums/diagnostics in its manifest
+- the golden fixture is one continuous 48 kHz stem scene, not concatenated transition PCM
 - the eight published Android images come from the Compose emulator screenshot harness
 
 ## Open limits and risks
 
 - No neural model or weights are bundled. Current separation is deterministic Tier C DSP.
-- Android still renders scenes in the retained Java Tier C path. The C++ core owns the native
-  lifecycle/output boundary, but its renderer is not yet the Android end-to-end render source.
+- Android still renders scenes in the retained Java Tier C path. Its producer owns stem automation
+  and feeds the native SPSC ring; native callback-side stem mixing is not implemented.
 - The iOS target has no local media-library decoder or model runtime yet.
 - Android audio-focus and `ACTION_AUDIO_BECOMING_NOISY` handling are not implemented.
 - Real-device listening, interruption, route-change, background, battery, thermal, memory, and

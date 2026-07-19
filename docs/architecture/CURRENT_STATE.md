@@ -1,6 +1,6 @@
 # Current state
 
-Snapshot: `2.2.0` release candidate, 2026-07-19.
+Snapshot: `2.3.0` release, 2026-07-19.
 
 ## Confirmed implementation
 

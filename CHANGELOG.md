@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.3.0 — Continuous stem scene engine
+
+- Replaced separately scheduled Android transition PCM with one structured stem
+  scene rendered through the persistent 48 kHz stereo master graph.
+- Added ten deterministic candidate families, multidimensional scoring, hard
+  vetoes, explicit anchor coverage, and strict single-source vocal ownership.
+- Added independent A/B/generated stem timelines with per-stem automation,
+  non-vocal generated fills, an in-scene clean-B landing, and a prepared B
+  runway.
+- Added deadline-aware preparation, real fallback ordering and reasons, plus a
+  transition inspector with activation, buffer, click, loudness, and spectral
+  diagnostics.
+- Added exact 51-second activation, landing, vocal-conflict, fallback, golden
+  audio, and 1,000-case deterministic planner coverage.
+- Fixed scene-duration integer overflow and removed transition-boundary buffer
+  allocation from the primary playback path.
+- No neural model or weights are bundled. Physical-device performance and
+  listening verification remain required and are not claimed by this release.
+
 ## 2.2.0 — Progressive non-repeating transitions
 
 - Removed indefinite anchor hold loops. Source material now plays once by
