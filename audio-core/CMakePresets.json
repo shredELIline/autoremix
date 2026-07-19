@@ -1,0 +1,49 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "release",
+      "displayName": "Release tests",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../build/audio-core-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "AUTOREMIX_AUDIO_CORE_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "benchmark",
+      "displayName": "Release benchmark",
+      "inherits": "release",
+      "binaryDir": "${sourceDir}/../build/audio-core-benchmark",
+      "cacheVariables": {
+        "AUTOREMIX_AUDIO_CORE_BUILD_TESTS": "OFF",
+        "AUTOREMIX_AUDIO_CORE_BUILD_BENCHMARKS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "release",
+      "configurePreset": "release"
+    },
+    {
+      "name": "benchmark",
+      "configurePreset": "benchmark"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
