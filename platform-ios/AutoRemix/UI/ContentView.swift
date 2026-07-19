@@ -389,7 +389,7 @@ private struct WaveformProgressView: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
-                        onSeek(min(max(value.location.x / max(proxy.size.width, 1), 0), 1)
+                        onSeek(min(max(value.location.x / max(proxy.size.width, 1), 0), 1))
                     }
             )
         }
