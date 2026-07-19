@@ -1,0 +1,123 @@
+name: Android release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Test and build APK
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate version tag
+        run: python3 .github/scripts/validate_version.py --tag "$GITHUB_REF_NAME"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Install Android toolchain
+        shell: bash
+        run: |
+          sdk_root="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          SDKMANAGER="${sdk_root}/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER"
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses >/dev/null
+          license_status=${PIPESTATUS[1]}
+          set -o pipefail
+          test "$license_status" -eq 0
+          "$SDKMANAGER" --install \
+            "platforms;android-37" \
+            "build-tools;37.0.0" \
+            "ndk;29.0.14206865" \
+            "cmake;3.31.6"
+
+      - name: Test and build installable preview
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon \
+            :platform-android:testDebugUnitTest \
+            :platform-android:lintDebug \
+            :platform-android:assembleDebug
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          mkdir -p release
+          cp platform-android/build/outputs/apk/debug/platform-android-debug.apk \
+            release/AutoRemix-android.apk
+          cd release
+          sha256sum AutoRemix-android.apk > SHA256SUMS.txt
+
+      - name: Transfer verified assets to publisher
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-assets
+          path: release/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified assets
+        uses: actions/download-artifact@v8
+        with:
+          name: release-assets
+          path: release
+
+      - name: Preserve imported 2.0.0 history
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if ! gh release view v2.0.0 >/dev/null 2>&1; then
+            gh release create v2.0.0 \
+              --verify-tag \
+              --title "AutoRemix 2.0.0 — historical source snapshot" \
+              --notes "Imported Android PCM Stem Director snapshot. Source only; no archived APK is available."
+          fi
+
+      - name: Publish immutable version release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          notes="Android 10+ preview APK for arm64-v8a and x86_64. Verify SHA256SUMS.txt before installation. This build uses an ephemeral Android debug certificate; uninstall an older preview first if Android reports a signature conflict."
+          gh release create "$GITHUB_REF_NAME" \
+            release/AutoRemix-android.apk \
+            release/SHA256SUMS.txt \
+            --verify-tag \
+            --latest \
+            --title "AutoRemix ${version}" \
+            --notes "$notes"

@@ -23,6 +23,7 @@ pipeline.
 ./gradlew :platform-android:lintDebug :platform-android:assembleDebug
 python .github/scripts/validate_docs.py docs
 python .github/scripts/repository_policy.py
+python .github/scripts/validate_version.py
 ```
 
 iOS requires macOS and Xcode. See `platform-ios/README.md`.
@@ -32,3 +33,14 @@ iOS requires macOS and Xcode. See `platform-ios/README.md`.
 Use small imperative commits, for example `audio: preserve anchor coverage`.
 Do not commit generated keys, copyrighted songs, private paths, model weights,
 or local build output.
+
+## Releases
+
+1. Update `VERSION_NAME` and monotonically increasing `VERSION_CODE` in
+   `version.properties`.
+2. Sync the two iOS build settings and add the changelog entry.
+3. Run `python .github/scripts/validate_version.py --tag vX.Y.Z`.
+4. Merge to `main`, then create and push the annotated `vX.Y.Z` tag.
+
+The tag workflow publishes `AutoRemix-android.apk` and `SHA256SUMS.txt`. Never
+move or reuse a published version tag. Older releases stay on GitHub Releases.

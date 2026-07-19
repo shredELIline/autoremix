@@ -7,6 +7,7 @@
 [![Android 10+](https://img.shields.io/badge/Android-10%2B-3DDC84?logo=android&logoColor=white)](platform-android/README.md)
 [![iOS 16+](https://img.shields.io/badge/iOS-16%2B-111111?logo=apple&logoColor=white)](platform-ios/README.md)
 [![CI](https://github.com/shredELIline/autoremix/actions/workflows/ci.yml/badge.svg)](https://github.com/shredELIline/autoremix/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/shredELIline/autoremix?display_name=tag&sort=semver)](https://github.com/shredELIline/autoremix/releases/latest)
 [![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-7B61FF)](LICENSE)
 ![On-device](https://img.shields.io/badge/audio-on--device-45D6C5)
 ![Privacy](https://img.shields.io/badge/telemetry-none-45D6C5)
@@ -18,6 +19,28 @@ Local, deterministic AutoDJ research app for Android and iOS. It plans independe
 </div>
 
 > Status: working Tier-C vertical slice. Android builds locally. iOS has a native integration target and macOS CI, but was not built in this Windows workspace. No neural model or weights are bundled.
+
+## Download
+
+| Platform | Requirement | Package |
+| --- | --- | --- |
+| Android | Android 10+ · arm64-v8a or x86_64 | **[Download latest APK](https://github.com/shredELIline/autoremix/releases/latest/download/AutoRemix-android.apk)** |
+| iOS | iOS 16+ · Xcode signing required | [Build from source](platform-ios/README.md) — no public IPA yet |
+
+[All versions](https://github.com/shredELIline/autoremix/releases) · [Tags](https://github.com/shredELIline/autoremix/tags) · [Latest checksum](https://github.com/shredELIline/autoremix/releases/latest/download/SHA256SUMS.txt)
+
+> The downloadable APK is a CI-built debug preview. Check `SHA256SUMS.txt`. Its ephemeral debug certificate can require uninstalling an older preview before installing a newer one.
+
+`version.properties` is the version source. CI checks the Git tag, Android `versionName/versionCode`, iOS `MARKETING_VERSION/CURRENT_PROJECT_VERSION`, and changelog. Existing releases are never overwritten.
+
+### Version history
+
+| Version | Android | iOS | Source |
+| --- | --- | --- | --- |
+| [2.1.0](https://github.com/shredELIline/autoremix/releases/tag/v2.1.0) · code 9 | Preview APK | Source target | `v2.1.0` |
+| [2.0.0](https://github.com/shredELIline/autoremix/releases/tag/v2.0.0) · code 8 | Historical source snapshot | — | `v2.0.0` |
+
+The machine-readable history is in [`release-history.json`](release-history.json). Each future tag adds a release; previous entries and downloads remain visible.
 
 ## Product
 
@@ -181,7 +204,7 @@ Code is [Apache-2.0](LICENSE). Synthetic demo audio is [CC0](docs/assets/audio/L
 - harden cache corruption, eviction, and restart coverage;
 - measure licensed neural stem providers before enabling Tier A/B;
 - add iOS snapshot assets from a simulator;
-- add release signing, SBOM, AAB, and reproducible release checksums.
+- add stable release signing, SBOM, Play-ready AAB, and reproducible-build verification.
 
 ## FAQ
 

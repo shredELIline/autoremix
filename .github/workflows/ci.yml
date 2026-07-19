@@ -197,5 +197,8 @@ jobs:
           python3 scripts/generate_audio_fixtures.py
           git diff --exit-code -- docs/assets/audio tests/fixtures/golden
 
+      - name: Validate cross-platform version
+        run: python3 .github/scripts/validate_version.py
+
       - name: Validate
         run: python3 .github/scripts/validate_docs.py docs

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "releases": [
+    {
+      "version_name": "2.0.0",
+      "version_code": 8,
+      "tag": "v2.0.0",
+      "android": "source-only",
+      "ios": "not-available"
+    },
+    {
+      "version_name": "2.1.0",
+      "version_code": 9,
+      "tag": "v2.1.0",
+      "android": "debug-preview-apk",
+      "ios": "source-only"
+    }
+  ]
+}

@@ -12,6 +12,8 @@
   coalescing, feedback, and guaranteed continuity fallbacks.
 - Added open-source policy files, ADRs, CI/security/Pages workflows, licensed
   synthetic audio, renderer screenshot harness, and static showcase.
+- Added cross-platform version validation and tag-based APK releases with
+  checksums and retained version history.
 - No neural model or model weights are included.
 
 ## 2.0.0 — PCM Stem Director

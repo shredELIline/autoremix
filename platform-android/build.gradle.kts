@@ -1,10 +1,17 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
 
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+
+val versionProperties = Properties().apply {
+    rootProject.file("version.properties").inputStream().use { load(it) }
+}
+val appVersionName = requireNotNull(versionProperties.getProperty("VERSION_NAME"))
+val appVersionCode = requireNotNull(versionProperties.getProperty("VERSION_CODE")).toInt()
 
 android {
     namespace = "com.alexey.autoremix"
@@ -15,8 +22,8 @@ android {
         applicationId = "com.alexey.autoremix"
         minSdk = 29
         targetSdk = 37
-        versionCode = 9
-        versionName = "2.1.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
