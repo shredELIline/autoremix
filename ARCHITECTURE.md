@@ -8,17 +8,12 @@ while the retained Java Tier-C renderer is ported behind the same contract.
 ```mermaid
 flowchart LR
   Media["Platform media decoder"] --> Analysis["Offline analysis and preprocessing"]
-  Analysis --> Reservoir["Fragment bank, continuation reservoir and graph"]
-  Reservoir --> Level0["Instant deterministic Level 0"]
-  Reservoir --> Future["Enhanced or optional neural candidates"]
-  Level0 --> Core["Shared C++ plan / render contract"]
-  Future -->|"uncommitted future only"| Core
-  Analysis --> AndroidProvider["Retained Android Tier-C renderer"]
-  Core --> Blocks["Rolling prepared PCM horizons"]
-  AndroidProvider --> Blocks
-  Blocks --> Boundary["ARMED / musical activation boundary"]
-  Boundary --> Session["Playback session"]
-  Session --> Ring["Preallocated SPSC ring"]
+  Analysis --> Stems["Prepared A/B/generated stem buffers"]
+  Stems --> Planner["Structured candidate search and hard vetoes"]
+  Planner --> Plan["ContinuousSceneTransitionPlan"]
+  Plan --> Scene["PreparedStemScene automation and processors"]
+  Scene --> Master["Persistent 48 kHz stereo MasterAudioGraph"]
+  Master --> Ring["Preallocated SPSC ring"]
   Ring --> Output["AAudio/Oboe or AVAudioEngine"]
 ```
 
@@ -28,16 +23,14 @@ lock, infer, read files, log, or access the network.
 ## Progressive transition invariants
 
 Target selection and audible activation are separate. Track A follows its
-natural runway while preparation moves through candidate discovery and quality
-gates. `TRANSITIONING` is forbidden until at least one valid candidate is
-`ARMED`; activation then waits for the next suitable musical boundary.
+natural runway while A/B stems, automation, processors, B landing, and a B
+runway are prepared. `TRANSITIONING` is forbidden until one valid plan is
+`ARMED`. Activation changes envelopes on the existing master timeline.
 
-The deterministic Level 0 candidate is prepared first. The continuation
-reservoir and bounded graph search extend short runway with distinct fragments,
-exclude recent fragment IDs and melodic fingerprints, reject infinite
-self-edges, and require arrangement novelty. Low-watermark recovery stops
-expensive work and refills with deterministic playable PCM without copying the
-last block.
+The deterministic stem planner evaluates ten scene families. Hard vetoes reject
+double lead vocals, missing anchors, unready buffers, underrun risk, and sample
+discontinuity. If no stem plan survives, fallback order is legacy intelligent,
+phrase-aware crossfade, then basic crossfade. The reason is mandatory.
 
 The rolling horizons are:
 
@@ -46,16 +39,15 @@ The rolling horizons are:
 - target rendered: 16–32 bars;
 - planning: 32–64 bars.
 
-Enhanced deterministic or neural candidates may replace only uncommitted
-future blocks at a safe boundary. Failure, cancellation, or thermal throttling
-cannot reduce the guaranteed horizon. No neural provider, model, or weights are
-bundled, so the shipped path remains deterministic Tier C.
+No neural provider, model, or weights are bundled. The shipped Android path is
+deterministic Tier C and reports `aiUsed=false`. The provider boundary can add
+an AI-authored structured plan later; it cannot return a monolithic bridge WAV.
 
-The control plane exposes natural runway, generation ETA, all horizon sizes,
-candidate level, recent fragment IDs, repetition/novelty scores, low-watermark
-events, neural upgrades, and fallback reason. It logs outside the audio thread
-and exports no user audio. Named-device latency, memory, cache, battery,
-thermal, inference, and underrun measurements remain required.
+The control plane exposes plan provenance, strategy, anchor, vocal/stem owner
+timelines, scores, vetoes, horizons, underruns, continuity metrics, statistics,
+and fallback reason. It logs outside the callback and exports no user audio.
+Named-device latency, memory, battery, thermal, and underrun traces remain
+required.
 
 Start with [current state](docs/architecture/CURRENT_STATE.md), then read the
 [target state](docs/architecture/TARGET_STATE.md),

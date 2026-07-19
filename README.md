@@ -48,7 +48,7 @@ The machine-readable history is in [`release-history.json`](release-history.json
 
 A transition is an arrangement change, not two full mixes fading past each other. Each available role receives its own immutable timeline. The planner chooses one anchor and stages the remaining roles around it. Generated provenance is prohibited for vocals.
 
-Selecting Track B starts preparation; it does not start audible transition audio. Track A keeps playing through its natural runway while the control plane prepares an instant deterministic Level 0 candidate, then optional enhanced candidates. The transition becomes `ARMED` only after a technically valid minimum bridge exists and starts at the next suitable musical boundary. A missed boundary moves activation to the next one.
+Selecting Track B prepares decoded B material, deterministic stems, DSP state, and an immutable `ContinuousSceneTransitionPlan`. The same 48 kHz stereo master stream renders A stems, the hybrid scene, the clean-B landing, and the following B runway. No transition WAV, player switch, decoder startup, output restart, or ring reset occurs at activation.
 
 The continuation reservoir and graph provide distinct compatible fragments instead of one repeated hold loop. Planning excludes recent fragment IDs and melodic fingerprints, rejects infinite self-edges, and requires audible arrangement change across the continuation.
 
@@ -56,26 +56,22 @@ The continuation reservoir and graph provide distinct compatible fragments inste
 | --- | --- | --- | --- |
 | ![Local library](docs/assets/screenshots/library-dark.png) | ![Now playing](docs/assets/screenshots/now-playing-dark.png) | ![Transition preparation](docs/assets/screenshots/transition-dark.png) | ![Transition in progress](docs/assets/screenshots/transition-in-progress-dark.png) |
 
-More: [queue](docs/assets/screenshots/queue-dark.png), [analysis cache](docs/assets/screenshots/analysis-cache-dark.png), [settings](docs/assets/screenshots/settings-dark.png), [light theme](docs/assets/screenshots/now-playing-light.png). These files are produced by the Compose screenshot harness.
+More: [queue](docs/assets/screenshots/queue-dark.png), [analysis cache](docs/assets/screenshots/analysis-cache-dark.png), [settings](docs/assets/screenshots/settings-dark.png), [light theme](docs/assets/screenshots/now-playing-light.png). These screenshots predate the continuous-scene inspector fields.
 
 ## Audio pipeline
 
 ```mermaid
 flowchart LR
-  A["Track A natural runway"] --> Ring["Preallocated SPSC buffer"]
-  B["Selected Track B"] --> Analyze["Offline analysis and preprocessing"]
-  Analyze --> Bank["Fragment bank, reservoir, continuation graph"]
-  Bank --> L0["Level 0 deterministic candidate"]
-  Bank --> Future["Enhanced or optional neural future"]
-  L0 --> Gate["Quality and repetition gates"]
-  Future -->|"uncommitted future only"| Gate
-  Gate --> Horizons["Rolling rendered horizons"]
-  Horizons --> Armed["ARMED: wait for musical boundary"]
-  Armed --> Ring
+  A["Decoded Track A stems"] --> Plan["ContinuousSceneTransitionPlan"]
+  B["Decoded Track B stems"] --> Plan
+  G["Optional instrumental fill"] --> Plan
+  Plan --> Prepared["PreparedStemScene: per-stem envelopes and processors"]
+  Prepared --> Master["Persistent MasterAudioGraph"]
+  Master --> Ring["Preallocated SPSC ring"]
   Ring --> Device["Oboe/AAudio or AVAudioEngine"]
 ```
 
-The rolling plan keeps 2 committed bars immutable, at least 8 bars of guaranteed playable PCM, a 16–32 bar rendered target, and a 32–64 bar planning horizon. Near the low watermark, expensive candidate generation stops and deterministic continuation refills the guaranteed horizon without repeating the last block. A later neural result may replace only safe, uncommitted future audio; playback never waits for it.
+The primary Android path prepares a 16-bar stem handoff plus an 8-bar clean-B landing and queues a B runway before activation. If preparation is not valid, A continues and the transition is retried. Fallback order is legacy intelligent, phrase-aware, then basic crossfade. Every fallback carries a reason.
 
 The shared C++17 core provides sample-accurate automation, continuation planning, repetition evaluation, diagnostic quality gates, cache identities, lifecycle epochs, rapid-Next coalescing, and a stable C ABI. Audio callbacks only consume pre-rendered PCM from a preallocated lock-free ring. Preparation, logging, and candidate generation stay outside the callback.
 
@@ -91,8 +87,9 @@ flowchart TB
     Planner --> Cache["Versioned bounded cache"]
   end
   subgraph Data["Realtime data plane"]
-    Cache --> PCM["Prepared PCM blocks"]
-    PCM --> SPSC["SPSC ring"]
+    Cache --> Nodes["Prepared A/B/generated stem nodes"]
+    Nodes --> Graph["One master graph and sample clock"]
+    Graph --> SPSC["SPSC ring"]
     SPSC --> Android["Android Oboe"]
     SPSC --> iOS["iOS AVAudioEngine"]
   end
@@ -112,11 +109,11 @@ See [current-state audit](docs/architecture/CURRENT_STATE.md), [target state](do
 | --- | --- | --- |
 | A | Measured high-end device; licensed neural separation/continuation | Provider boundary and admission policy only |
 | B | Compact model plus deterministic DSP | Provider boundary and roadmap only |
-| C | HPSS/spatial stems, WSOLA, phase alignment, procedural bridge | Implemented default |
+| C | HPSS/spatial stems, WSOLA, phase alignment, continuous stem scene | Implemented default |
 
 The core can map caller-supplied throughput, memory, battery, core, and thermal measurements to bounded search profiles. Android currently runs the deterministic Tier-C profile; first-launch device measurement is still roadmap work. A future model must pass the same technical gates and license review. See [on-device ML decision](docs/research/ON_DEVICE_ML.md) and [model licenses](MODEL_LICENSES.md).
 
-The control plane reports natural runway, generation ETA, committed/guaranteed/planning horizons, active candidate level, recent fragment IDs, repetition and novelty scores, low-watermark events, neural upgrades, and fallback reason. Diagnostics never run on the audio thread and exclude user audio.
+The inspector reports strategy, AI and separator provenance, anchors, vocal/stem timelines, candidate scores and vetoes, fallback reason, activation sample, buffer, underruns, gap, click, loudness, and spectral metrics. Exported JSON contains no user audio or media identity.
 
 ## Build
 
@@ -162,7 +159,7 @@ xcodebuild -project platform-ios/AutoRemix.xcodeproj \
 4. Use Like, Dislike, Next, pause, and seek from the app or media controls.
 5. Inspect transition readiness, queue, and local cache state.
 
-The [showcase](docs/index.html) includes reproducible CC0 synthetic A, B, bridge, and combined audio. Run it locally:
+The [showcase](docs/index.html) includes reproducible CC0 synthetic A, B, and one 48 kHz continuous stem scene. It does not publish a standalone bridge file. Run it locally:
 
 ```bash
 python -m http.server 8000 --directory docs
@@ -205,7 +202,7 @@ Code is [Apache-2.0](LICENSE). Synthetic demo audio is [CC0](docs/assets/audio/L
 
 - The bundled separator is deterministic HPSS + spatial DSP, not Demucs or another neural model.
 - No neural continuation provider, model, or weights are bundled. Neural upgrades remain an optional provider path.
-- Procedural generation creates short instrumental bridge texture; it is not full-song generation.
+- Deterministic generation can add a short instrumental fill node; it never generates vocals or a monolithic bridge track.
 - Real-device musical quality, battery, thermal behavior, and underruns still need a published device matrix.
 - The iOS simulator target is verified by macOS CI; physical hardware and
   signing still require verification.

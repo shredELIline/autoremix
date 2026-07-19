@@ -76,7 +76,7 @@
         </div>
         <label class="scrubber-label" for="transition-scrubber"><span id="scene-label">Source A arrangement</span><output id="scene-time">00:00</output></label>
         <input id="transition-scrubber" type="range" min="0" max="1000" value="410" aria-describedby="scrubber-help">
-        <p id="scrubber-help" class="sr-only">Move through the bridge to inspect which source owns each stem.</p>
+        <p id="scrubber-help" class="sr-only">Move through the continuous scene to inspect which source owns each stem.</p>
         <div class="legend" aria-label="Timeline legend"><span><i class="a"></i>Source A</span><span><i class="g"></i>Procedural</span><span><i class="b"></i>Source B</span></div>
       </div>
     </section>
@@ -93,7 +93,7 @@
         <p class="kicker">The engine</p>
         <h2>A transition is a scene,<br>not a volume curve.</h2>
       </div>
-      <p class="section-lede">A bounded search proposes layered bridges and non-repeating continuation. Hard technical gates reject clicks, clipping, stale repetition, missing anchor coverage, and invalid vocal provenance before musical ranking begins.</p>
+      <p class="section-lede">A bounded search proposes structured stem scenes. Hard gates reject clicks, unready buffers, missing anchor coverage, and invalid vocal ownership before musical ranking begins.</p>
       <div class="feature-grid">
         <article class="feature feature-wide">
           <span class="feature-number">01</span>
@@ -121,7 +121,7 @@
         <p class="kicker">The apps</p>
         <h2>Complex underneath.<br>Quiet on the surface.</h2>
       </div>
-      <p class="section-lede">The C ABI is wired to both platform projects. Android currently keeps its proven Java Tier-C provider while native planning/rendering is ported; iOS uses the shared render bridge. Screenshot assets below come only from the Compose renderer.</p>
+      <p class="section-lede">Android runs the deterministic structured planner, prepared stem nodes, one persistent master graph, and one Oboe stream. No neural model is bundled. The screenshots below predate the new inspector fields.</p>
       <div class="screenshot-grid">
         <figure class="app-shot tall">
           <img src="assets/screenshots/now-playing-dark.png" alt="AutoRemix now playing screen in dark mode" loading="lazy">
@@ -133,7 +133,7 @@
         </figure>
         <figure class="app-shot">
           <img src="assets/screenshots/transition-dark.png" alt="AutoRemix transition preparation screen in dark mode" loading="lazy">
-          <figcaption><strong>Transition readiness</strong><span>Guaranteed fallback first, better candidates when ready.</span></figcaption>
+          <figcaption><strong>Transition readiness</strong><span>Stem plan first, explicit fallback only when required.</span></figcaption>
         </figure>
         <figure class="app-shot wide-shot">
           <img src="assets/screenshots/queue-dark.png" alt="AutoRemix recommendation queue in dark mode" loading="lazy">
@@ -156,21 +156,21 @@
         <p class="kicker">Architecture</p>
         <h2>Offline intelligence.<br>Realtime discipline.</h2>
       </div>
-      <div class="architecture-map" role="img" aria-label="Offline preprocessing builds a continuation reservoir and rolling PCM horizons; an armed musical boundary and lock-free ring feed platform audio output">
+      <div class="architecture-map" role="img" aria-label="Offline preprocessing builds prepared stem nodes and a structured plan; one persistent master graph and lock-free ring feed platform audio output">
         <div class="arch-column control">
           <span>CONTROL PLANE</span>
           <div><b>Media decoder</b><small>Platform-native, local files</small></div>
           <i></i>
           <div><b>Preprocess + reservoir</b><small>Versioned chunks and continuation graph</small></div>
           <i></i>
-          <div><b>Plan + rolling render</b><small>Level 0 first → quality gates</small></div>
+          <div><b>Structured stem plan</b><small>Candidate search → hard vetoes</small></div>
         </div>
         <div class="arch-bridge">
-          <span>armed boundary</span><i></i><span>guaranteed PCM horizon</span>
+          <span>sample activation</span><i></i><span>prepared stem horizon</span>
         </div>
         <div class="arch-column realtime">
           <span>REALTIME PLANE</span>
-          <div><b>Session clock</b><small>Pause, seek, Next epoch</small></div>
+          <div><b>Master graph</b><small>One 48 kHz sample clock</small></div>
           <i></i>
           <div><b>SPSC ring</b><small>Preallocated, lock-free</small></div>
           <i></i>
@@ -204,8 +204,7 @@
       <div class="audio-grid">
         <article><span>01</span><h3>Source A</h3><p>112 BPM · guitar anchor</p><audio controls preload="none" src="assets/audio/source-a.wav">Your browser does not support audio playback.</audio></article>
         <article><span>02</span><h3>Source B</h3><p>118 BPM · target arrangement</p><audio controls preload="none" src="assets/audio/source-b.wav">Your browser does not support audio playback.</audio></article>
-        <article><span>03</span><h3>Procedural bridge</h3><p>Continuous anchor · staged handoff</p><audio controls preload="none" src="assets/audio/procedural-bridge.wav">Your browser does not support audio playback.</audio></article>
-        <article><span>04</span><h3>Combined</h3><p>A → bridge → B</p><audio controls preload="none" src="assets/audio/combined-demo.wav">Your browser does not support audio playback.</audio></article>
+        <article><span>03</span><h3>Continuous stem scene</h3><p>A → independent stem handoff → clean B</p><audio controls preload="none" src="assets/audio/continuous-stem-scene.wav">Your browser does not support audio playback.</audio></article>
       </div>
       <p class="screenshot-note">Generated deterministically by <code>scripts/generate_audio_fixtures.py</code>. Assets are CC0; checksums and technical metrics are in the adjacent manifest.</p>
     </section>

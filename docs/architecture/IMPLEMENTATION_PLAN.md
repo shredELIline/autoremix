@@ -6,7 +6,7 @@
 | 1 | Complete | Shared PCM core, C ABI, and SPSC output | — |
 | 2 | Partial | Versioned bounded analysis and preprocessing cache contracts | Persist and pin all native stem/chunk artifacts on both platforms |
 | 3 | Complete | Independent stem and non-repeating continuation planners | — |
-| 4 | Complete | Deterministic bridge, repetition evaluator, and click gates | — |
+| 4 | Complete | Continuous stem scene, repetition evaluator, and continuity gates | — |
 | 5 | Complete | State machine, rolling horizons, cancellation, EOF fallback, and queue epochs | — |
 | 6 | Partial | Android app, Oboe output, unit/lint CI, screenshot harness, preview APK | Physical-device instrumentation and stable signing |
 | 7 | Partial | iOS target with simulator build/tests in macOS CI | Physical-device audio, background, interruption, and signing verification |

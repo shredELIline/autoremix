@@ -39,3 +39,19 @@ The baseline `LayerTransitionMixer` contains families where A and B lead gains o
 - Optional provider path: `AI_LAYERED_STEM` only after a provider returns a structured plan and diagnostics record that fact.
 - Legacy/crossfade path: always include a machine-readable fallback reason.
 
+## Refactored runtime verification
+
+- Android now runs the structured planner and incremental stem renderer as the
+  primary path.
+- Ten stem families are generated and scored across twelve dimensions.
+- Anchor coverage, buffer readiness, sample continuity, and vocal ownership are
+  hard gates.
+- The inspector and exported JSON expose the winner, rejected candidates,
+  anchors, timelines, quality, fallback reason, activation, and underruns.
+- The eligible deterministic corpus selects a stem plan in 1000/1000 cases.
+- The built-in plan origin is `DETERMINISTIC`; `aiUsed=false` is enforced by tests.
+
+No neural provider or weights are present. Therefore the measured
+`aiLayeredTransitionRate` is 0%, not 99%. The verified primary rate is the
+deterministic stem rate. A future AI provider must return the same structured
+plan and pass the same gates before `aiUsed=true` is legal.

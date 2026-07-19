@@ -48,3 +48,23 @@ The producer side does not yet satisfy a continuous scene graph:
 - it does not keep A/B/generated stem nodes attached to one persistent graph;
 - it cannot prove an 8-bar prepared stem horizon at activation.
 
+## Refactored Android flow
+
+```text
+decode A/B ahead -> WSOLA/phase alignment -> deterministic pseudo-stems
+  -> structured candidate search + hard vetoes
+  -> immutable ContinuousSceneTransitionPlan
+  -> preloaded PreparedStemScene
+       A nodes + B nodes + optional generated instrumental nodes
+       per-stem gain/pitch/formant/tempo/pan/width/EQ/filter/reverb/
+       transient/harmonic/timbre automation
+  -> persistent 48 kHz stereo MasterAudioGraph
+       bus -> DC blocker -> lookahead limiter -> continuity meters
+  -> one native SPSC ring -> one Oboe callback/output stream
+```
+
+The prepared scene contains the A→hybrid→clean-B landing and eight bars of B.
+The next B runway is prepared before activation. Normal activation does not
+open media, create a decoder, allocate boundary arrays, seek, flush the ring,
+or restart graph nodes. Explicit user seek remains the only normal graph-state
+restart path.

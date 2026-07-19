@@ -39,3 +39,15 @@ That queue-empty branch is the exact software path that creates the reported fre
 
 The queue-starvation branch and underrun counter are confirmed by code and deterministic host tests. No physical-device trace was available in this Windows workspace. Device-specific callback timing remains to be measured; the architectural cause does not depend on a particular handset.
 
+## Refactor result
+
+- The emergency crossfade is no longer queued first.
+- The primary candidate is a structured, preloaded `PreparedStemScene`.
+- A/B/generated nodes render incrementally through one persistent master graph.
+- Boundary buffers are preallocated. Master DC, limiter, and meter state persists.
+- The B landing is inside the same prepared scene. A B runway is queued before activation.
+- Exact 51.000-second host regression reports zero graph gap, underruns, and node recreation.
+
+This is host evidence, not a physical-device trace. Native callback zero-fill is
+reported by the native underrun counter; a named-device Perfetto/Oboe trace is
+still required before claiming handset-wide zero-gap behavior.

@@ -12,7 +12,7 @@
     const state = progress < .28
       ? 'Source A arrangement'
       : progress < .66
-        ? 'Layered procedural bridge'
+        ? 'Layered hybrid scene'
         : 'Target B arrangement';
     label.textContent = state;
     scrubber.setAttribute('aria-valuetext', `${state}, ${seconds} seconds`);
