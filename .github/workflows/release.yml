@@ -50,7 +50,7 @@ jobs:
           set -o pipefail
           test "$license_status" -eq 0
           "$SDKMANAGER" --install \
-            "platforms;android-37" \
+            "platforms;android-37.0" \
             "build-tools;37.0.0" \
             "ndk;29.0.14206865" \
             "cmake;3.31.6"
@@ -94,7 +94,7 @@ jobs:
           name: release-assets
           path: release
 
-      - name: Preserve imported 2.0.0 history
+      - name: Preserve source-only release history
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -104,6 +104,12 @@ jobs:
               --verify-tag \
               --title "AutoRemix 2.0.0 — historical source snapshot" \
               --notes "Imported Android PCM Stem Director snapshot. Source only; no archived APK is available."
+          fi
+          if ! gh release view v2.1.0 >/dev/null 2>&1; then
+            gh release create v2.1.0 \
+              --verify-tag \
+              --title "AutoRemix 2.1.0 — source snapshot" \
+              --notes "Shared-core vertical slice. Source only; its first APK publishing run failed before the build step."
           fi
 
       - name: Publish immutable version release

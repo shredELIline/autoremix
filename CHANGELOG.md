@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.1.1 — Versioned APK delivery
+
+- Fixed the Android 37 CI package identifier used by release builds.
+- Added an immutable latest-APK release while retaining source-only 2.0.0 and
+  2.1.0 history.
+
 ## 2.1.0 — Shared core vertical slice
 
 - Added a portable C++17 transition planner, renderer, evaluator, lifecycle,

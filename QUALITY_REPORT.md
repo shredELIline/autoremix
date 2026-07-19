@@ -1,11 +1,11 @@
-# AutoRemix 2.1.0 quality report
+# AutoRemix 2.1.1 quality report
 
 Verified on 2026-07-19 from the local commit series. The host was Windows 11 with Linux containers.
 
 ## Android build
 
 - package: `com.alexey.autoremix`
-- version: `2.1.0` (`versionCode=9`)
+- version: `2.1.1` (`versionCode=10`)
 - `minSdk=29`, `targetSdk=37`, `compileSdk=37`
 - `lintDebug`: 0 errors, 11 warnings
 - `testDebugUnitTest`: 7 passed, 0 failed
@@ -19,8 +19,8 @@ and two resources used only by the screenshot harness. None are suppressed.
 
 | Artifact | Size | SHA-256 |
 | --- | ---: | --- |
-| `platform-android-debug.apk` | 72,962,314 bytes | `ccf77789152312049c04c4a54afe488804ce89cb96c470a79de345234fc713e1` |
-| `platform-android-debug.aab` | 19,651,840 bytes | `4d3d2b2358f30761e201e7b035a4fc1dfb40569c7ac22c5f5bfe09a913953102` |
+| `platform-android-debug.apk` | 72,198,935 bytes | `13fdf38eb0f821f3b0344f5d3a4dd71cd95d459bab4f3fd2f7e2b7e51e6f8d7b` |
+| `platform-android-debug.aab` | 19,651,846 bytes | `42793f530103954354f680f1bdc2b3f32bdbbbebe8d709811f1ffff3d19f7162` |
 | `platform-android-debug-androidTest.apk` | 2,442,261 bytes | `6beabb48bd567c699d5001d8a8f50a4921f574d8f6038fdc3e360dc66c76185a` |
 
 These are debug artifacts. The APK uses APK Signature Scheme v2 and the standard `Android Debug`

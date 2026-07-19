@@ -104,7 +104,7 @@ jobs:
           set -o pipefail
           test "$license_status" -eq 0
           "$SDKMANAGER" --install \
-            "platforms;android-37" \
+            "platforms;android-37.0" \
             "build-tools;37.0.0" \
             "ndk;29.0.14206865" \
             "cmake;3.31.6"

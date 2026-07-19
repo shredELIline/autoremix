@@ -37,7 +37,8 @@ Local, deterministic AutoDJ research app for Android and iOS. It plans independe
 
 | Version | Android | iOS | Source |
 | --- | --- | --- | --- |
-| [2.1.0](https://github.com/shredELIline/autoremix/releases/tag/v2.1.0) · code 9 | Preview APK | Source target | `v2.1.0` |
+| [2.1.1](https://github.com/shredELIline/autoremix/releases/tag/v2.1.1) · code 10 | Preview APK | Source target | `v2.1.1` |
+| [2.1.0](https://github.com/shredELIline/autoremix/releases/tag/v2.1.0) · code 9 | Source snapshot | Source target | `v2.1.0` |
 | [2.0.0](https://github.com/shredELIline/autoremix/releases/tag/v2.0.0) · code 8 | Historical source snapshot | — | `v2.0.0` |
 
 The machine-readable history is in [`release-history.json`](release-history.json). Each future tag adds a release; previous entries and downloads remain visible.
