@@ -1,0 +1,584 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000000000000000000001 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* AppDelegate.swift */; };
+		A10000000000000000000002 /* AutoRemixApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* AutoRemixApp.swift */; };
+		A10000000000000000000003 /* AudioEngineController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* AudioEngineController.swift */; };
+		A10000000000000000000004 /* NativeAudioBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000004 /* NativeAudioBridge.mm */; };
+		A10000000000000000000005 /* BackgroundAnalysisScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000005 /* BackgroundAnalysisScheduler.swift */; };
+		A10000000000000000000006 /* PlaybackModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000006 /* PlaybackModels.swift */; };
+		A10000000000000000000007 /* NowPlayingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000007 /* NowPlayingController.swift */; };
+		A10000000000000000000008 /* PlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000008 /* PlaybackController.swift */; };
+		A10000000000000000000009 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000009 /* ContentView.swift */; };
+		A1000000000000000000000A /* PreviewFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000A /* PreviewFixtures.swift */; };
+		A1000000000000000000000B /* audio_core.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000B /* audio_core.cpp */; };
+		A1000000000000000000000C /* audio_core_c.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000F /* audio_core_c.cpp */; };
+		A20000000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000001 /* Assets.xcassets */; };
+		A30000000000000000000001 /* PreviewFixturesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B30000000000000000000001 /* PreviewFixturesTests.swift */; };
+		A40000000000000000000001 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B40000000000000000000001 /* AVFoundation.framework */; };
+		A40000000000000000000002 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B40000000000000000000002 /* AudioToolbox.framework */; };
+		A40000000000000000000003 /* BackgroundTasks.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B40000000000000000000003 /* BackgroundTasks.framework */; };
+		A40000000000000000000004 /* MediaPlayer.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B40000000000000000000004 /* MediaPlayer.framework */; };
+		A40000000000000000000005 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B40000000000000000000005 /* XCTest.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A50000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E00000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E10000000000000000000001;
+			remoteInfo = AutoRemix;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		B10000000000000000000001 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		B10000000000000000000002 /* AutoRemixApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoRemixApp.swift; sourceTree = "<group>"; };
+		B10000000000000000000003 /* AudioEngineController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngineController.swift; sourceTree = "<group>"; };
+		B10000000000000000000004 /* NativeAudioBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = NativeAudioBridge.mm; sourceTree = "<group>"; };
+		B10000000000000000000005 /* BackgroundAnalysisScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundAnalysisScheduler.swift; sourceTree = "<group>"; };
+		B10000000000000000000006 /* PlaybackModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackModels.swift; sourceTree = "<group>"; };
+		B10000000000000000000007 /* NowPlayingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingController.swift; sourceTree = "<group>"; };
+		B10000000000000000000008 /* PlaybackController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackController.swift; sourceTree = "<group>"; };
+		B10000000000000000000009 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		B1000000000000000000000A /* PreviewFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewFixtures.swift; sourceTree = "<group>"; };
+		B1000000000000000000000B /* audio_core.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = audio_core.cpp; path = "../audio-core/src/audio_core.cpp"; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000000C /* NativeAudioBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = NativeAudioBridge.h; sourceTree = "<group>"; };
+		B1000000000000000000000D /* AutoRemix-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "AutoRemix-Bridging-Header.h"; sourceTree = "<group>"; };
+		B1000000000000000000000E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		B1000000000000000000000F /* audio_core_c.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = audio_core_c.cpp; path = "../audio-core/src/audio_core_c.cpp"; sourceTree = SOURCE_ROOT; };
+		B20000000000000000000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		B30000000000000000000001 /* PreviewFixturesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewFixturesTests.swift; sourceTree = "<group>"; };
+		B40000000000000000000001 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
+		B40000000000000000000002 /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
+		B40000000000000000000003 /* BackgroundTasks.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = BackgroundTasks.framework; path = System/Library/Frameworks/BackgroundTasks.framework; sourceTree = SDKROOT; };
+		B40000000000000000000004 /* MediaPlayer.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MediaPlayer.framework; path = System/Library/Frameworks/MediaPlayer.framework; sourceTree = SDKROOT; };
+		B40000000000000000000005 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
+		B50000000000000000000001 /* AutoRemix.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AutoRemix.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B50000000000000000000002 /* AutoRemixTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AutoRemixTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		D10000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A40000000000000000000001 /* AVFoundation.framework in Frameworks */,
+				A40000000000000000000002 /* AudioToolbox.framework in Frameworks */,
+				A40000000000000000000003 /* BackgroundTasks.framework in Frameworks */,
+				A40000000000000000000004 /* MediaPlayer.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D10000000000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A40000000000000000000005 /* XCTest.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		C00000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				C10000000000000000000001 /* AutoRemix */,
+				C30000000000000000000001 /* AutoRemixTests */,
+				C40000000000000000000001 /* Shared Audio Core */,
+				C50000000000000000000001 /* Frameworks */,
+				C60000000000000000000001 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		C10000000000000000000001 /* AutoRemix */ = {
+			isa = PBXGroup;
+			children = (
+				C10000000000000000000002 /* App */,
+				C10000000000000000000003 /* Audio */,
+				C10000000000000000000004 /* Background */,
+				C10000000000000000000005 /* Models */,
+				C10000000000000000000006 /* Playback */,
+				C10000000000000000000007 /* UI */,
+				C10000000000000000000008 /* Fixtures */,
+				C10000000000000000000009 /* Resources */,
+			);
+			path = AutoRemix;
+			sourceTree = "<group>";
+		};
+		C10000000000000000000002 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000001 /* AppDelegate.swift */,
+				B10000000000000000000002 /* AutoRemixApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		C10000000000000000000003 /* Audio */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000003 /* AudioEngineController.swift */,
+				B1000000000000000000000D /* AutoRemix-Bridging-Header.h */,
+				B1000000000000000000000C /* NativeAudioBridge.h */,
+				B10000000000000000000004 /* NativeAudioBridge.mm */,
+			);
+			path = Audio;
+			sourceTree = "<group>";
+		};
+		C10000000000000000000004 /* Background */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000005 /* BackgroundAnalysisScheduler.swift */,
+			);
+			path = Background;
+			sourceTree = "<group>";
+		};
+		C10000000000000000000005 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000006 /* PlaybackModels.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		C10000000000000000000006 /* Playback */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000007 /* NowPlayingController.swift */,
+				B10000000000000000000008 /* PlaybackController.swift */,
+			);
+			path = Playback;
+			sourceTree = "<group>";
+		};
+		C10000000000000000000007 /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000009 /* ContentView.swift */,
+			);
+			path = UI;
+			sourceTree = "<group>";
+		};
+		C10000000000000000000008 /* Fixtures */ = {
+			isa = PBXGroup;
+			children = (
+				B1000000000000000000000A /* PreviewFixtures.swift */,
+			);
+			path = Fixtures;
+			sourceTree = "<group>";
+		};
+		C10000000000000000000009 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				B20000000000000000000001 /* Assets.xcassets */,
+				B1000000000000000000000E /* Info.plist */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		C30000000000000000000001 /* AutoRemixTests */ = {
+			isa = PBXGroup;
+			children = (
+				B30000000000000000000001 /* PreviewFixturesTests.swift */,
+			);
+			path = AutoRemixTests;
+			sourceTree = "<group>";
+		};
+		C40000000000000000000001 /* Shared Audio Core */ = {
+			isa = PBXGroup;
+			children = (
+				B1000000000000000000000B /* audio_core.cpp */,
+				B1000000000000000000000F /* audio_core_c.cpp */,
+			);
+			name = "Shared Audio Core";
+			sourceTree = "<group>";
+		};
+		C50000000000000000000001 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				B40000000000000000000001 /* AVFoundation.framework */,
+				B40000000000000000000002 /* AudioToolbox.framework */,
+				B40000000000000000000003 /* BackgroundTasks.framework */,
+				B40000000000000000000004 /* MediaPlayer.framework */,
+				B40000000000000000000005 /* XCTest.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		C60000000000000000000001 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				B50000000000000000000001 /* AutoRemix.app */,
+				B50000000000000000000002 /* AutoRemixTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		E10000000000000000000001 /* AutoRemix */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F10000000000000000000001 /* Build configuration list for PBXNativeTarget "AutoRemix" */;
+			buildPhases = (
+				D20000000000000000000001 /* Sources */,
+				D10000000000000000000001 /* Frameworks */,
+				D30000000000000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AutoRemix;
+			productName = AutoRemix;
+			productReference = B50000000000000000000001 /* AutoRemix.app */;
+			productType = "com.apple.product-type.application";
+		};
+		E10000000000000000000002 /* AutoRemixTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F10000000000000000000002 /* Build configuration list for PBXNativeTarget "AutoRemixTests" */;
+			buildPhases = (
+				D20000000000000000000002 /* Sources */,
+				D10000000000000000000002 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				E20000000000000000000001 /* PBXTargetDependency */,
+			);
+			name = AutoRemixTests;
+			productName = AutoRemixTests;
+			productReference = B50000000000000000000002 /* AutoRemixTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		E00000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					E10000000000000000000001 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					E10000000000000000000002 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = E10000000000000000000001;
+					};
+				};
+			};
+			buildConfigurationList = F00000000000000000000001 /* Build configuration list for PBXProject "AutoRemix" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = C00000000000000000000001;
+			productRefGroup = C60000000000000000000001 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				E10000000000000000000001 /* AutoRemix */,
+				E10000000000000000000002 /* AutoRemixTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		D30000000000000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A20000000000000000000001 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		D20000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000001 /* AppDelegate.swift in Sources */,
+				A10000000000000000000002 /* AutoRemixApp.swift in Sources */,
+				A10000000000000000000003 /* AudioEngineController.swift in Sources */,
+				A10000000000000000000004 /* NativeAudioBridge.mm in Sources */,
+				A10000000000000000000005 /* BackgroundAnalysisScheduler.swift in Sources */,
+				A10000000000000000000006 /* PlaybackModels.swift in Sources */,
+				A10000000000000000000007 /* NowPlayingController.swift in Sources */,
+				A10000000000000000000008 /* PlaybackController.swift in Sources */,
+				A10000000000000000000009 /* ContentView.swift in Sources */,
+				A1000000000000000000000A /* PreviewFixtures.swift in Sources */,
+				A1000000000000000000000B /* audio_core.cpp in Sources */,
+				A1000000000000000000000C /* audio_core_c.cpp in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D20000000000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A30000000000000000000001 /* PreviewFixturesTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		E20000000000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E10000000000000000000001 /* AutoRemix */;
+			targetProxy = A50000000000000000000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		F20000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		F20000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				COPY_PHASE_STRIP = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		F21000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CLANG_CXX_LIBRARY = "libc++";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/../audio-core/include",
+				);
+				INFOPLIST_FILE = AutoRemix/Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.alexey.autoremix;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "AutoRemix/Audio/AutoRemix-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		F21000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CLANG_CXX_LIBRARY = "libc++";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/../audio-core/include",
+				);
+				INFOPLIST_FILE = AutoRemix/Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.alexey.autoremix;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "AutoRemix/Audio/AutoRemix-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		F22000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.alexey.autoremix.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AutoRemix.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/AutoRemix";
+			};
+			name = Debug;
+		};
+		F22000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.alexey.autoremix.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AutoRemix.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/AutoRemix";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		F00000000000000000000001 /* Build configuration list for PBXProject "AutoRemix" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F20000000000000000000001 /* Debug */,
+				F20000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F10000000000000000000001 /* Build configuration list for PBXNativeTarget "AutoRemix" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F21000000000000000000001 /* Debug */,
+				F21000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F10000000000000000000002 /* Build configuration list for PBXNativeTarget "AutoRemixTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F22000000000000000000001 /* Debug */,
+				F22000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = E00000000000000000000001 /* Project object */;
+}
