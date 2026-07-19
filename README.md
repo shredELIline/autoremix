@@ -160,7 +160,7 @@ python -m http.server 8000 --directory docs
 
 Then open `http://localhost:8000`.
 
-Before the first hosted deployment, the repository owner must select **Settings → Pages → Source → GitHub Actions**. The workflow cannot enable that repository setting itself.
+The hosted showcase is deployed from `docs/` by [the Pages workflow](.github/workflows/pages.yml).
 
 ## Tests and measurements
 
