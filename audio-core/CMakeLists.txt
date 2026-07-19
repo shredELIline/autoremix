@@ -18,6 +18,7 @@ option(AUTOREMIX_AUDIO_CORE_BUILD_BENCHMARKS
 add_library(autoremix_audio_core
     src/audio_core.cpp
     src/audio_core_c.cpp
+    src/progressive_transition.cpp
 )
 add_library(autoremix::audio_core ALIAS autoremix_audio_core)
 

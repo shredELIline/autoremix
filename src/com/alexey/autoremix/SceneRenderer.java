@@ -28,17 +28,63 @@ final class SceneRenderer {
     static RenderedScene renderContinuation(Context context, Track track, TrackAnalysis analysis,
                                             TrackAnalysis.Fragment fragment, long startMs,
                                             long durationMs, String reason) throws Exception {
+        return renderContinuationVariant(context, track, analysis, fragment, startMs,
+                durationMs, ContinuationReservoir.VARIATION_NONE, reason);
+    }
+
+    static RenderedScene renderContinuationVariant(
+            Context context, Track track, TrackAnalysis analysis,
+            TrackAnalysis.Fragment fragment, long startMs, long durationMs,
+            int variationMask, String reason) throws Exception {
         long available = Math.max(0L, track.durationMs - startMs - 1_000L);
         if (available < 8_000L) throw new IllegalStateException("track ended");
         long requested = Math.min(durationMs, available);
         PcmAudio decoded = PcmDecoder.decode(context, track, startMs, requested, PROCESS_RATE);
         float[] programme = decoded.stereo.clone();
         applyProgramGain(programme, analysis.loudnessDb);
+        applyDeterministicVariation(programme, PROCESS_RATE, fragment.beatPeriodMs,
+                variationMask);
         MasteringChain.processInPlace(programme, PROCESS_RATE);
         PcmAudio output = PcmDecoder.resample(new PcmAudio(PROCESS_RATE, programme), OUTPUT_RATE);
         MasteringChain.applyEdgeSafety(output.stereo, OUTPUT_RATE, 7);
         return new RenderedScene(output, track, analysis, fragment,
                 startMs + decoded.durationMs(), track.displayName(), reason, false);
+    }
+
+    static void applyDeterministicVariation(float[] stereo, int sampleRate,
+                                            long beatPeriodMs, int variationMask) {
+        if (variationMask == ContinuationReservoir.VARIATION_NONE) return;
+        int frames = stereo.length / 2;
+        int beatFrames = Math.max(1, (int) Math.min(Integer.MAX_VALUE,
+                beatPeriodMs * sampleRate / 1_000L));
+        float lowLeft = 0f;
+        float lowRight = 0f;
+        float lowPassAlpha = .12f;
+        for (int frame = 0; frame < frames; frame++) {
+            int sample = frame * 2;
+            float left = stereo[sample];
+            float right = stereo[sample + 1];
+            if ((variationMask & ContinuationReservoir.VARIATION_RHYTHM) != 0) {
+                int beat = frame / beatFrames;
+                float phase = (frame % beatFrames) / (float) beatFrames;
+                float from = (beat & 1) == 0 ? 1.035f : .965f;
+                float to = (beat & 1) == 0 ? .965f : 1.035f;
+                float smooth = phase * phase * (3f - 2f * phase);
+                float gain = from + (to - from) * smooth;
+                left *= gain;
+                right *= gain;
+            }
+            if ((variationMask & ContinuationReservoir.VARIATION_TIMBRE) != 0) {
+                lowLeft += (left - lowLeft) * lowPassAlpha;
+                lowRight += (right - lowRight) * lowPassAlpha;
+                float mid = (left + right) * .5f;
+                float side = (left - right) * .41f;
+                left = (mid + side) * .82f + lowLeft * .18f;
+                right = (mid - side) * .82f + lowRight * .18f;
+            }
+            stereo[sample] = left;
+            stereo[sample + 1] = right;
+        }
     }
 
     static RenderedScene renderTransition(Context context,

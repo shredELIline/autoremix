@@ -1,5 +1,6 @@
 #include "autoremix/audio_core.hpp"
 #include "autoremix/audio_core_c.h"
+#include "autoremix/progressive_transition.hpp"
 
 #include <algorithm>
 #include <array>
@@ -13,6 +14,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 namespace ar = autoremix::audio;
@@ -123,6 +125,96 @@ views(const std::vector<OwnedStem> &owned) {
   result.logical_cores = 8U;
   result.thermal_headroom = 0.8F;
   result.battery_fraction = 0.8F;
+  return result;
+}
+
+[[nodiscard]] ar::FragmentDescriptor
+make_fragment(std::uint64_t id, std::uint32_t bars,
+              std::uint64_t melodic_fingerprint,
+              std::uint64_t arrangement_fingerprint = 0U) {
+  ar::FragmentDescriptor fragment;
+  fragment.fragment_id = id;
+  fragment.track_id = 7U;
+  fragment.stem_role = ar::StemRole::Harmony;
+  fragment.start_sample = (id - 1U) * 48'000U;
+  fragment.end_sample = fragment.start_sample + bars * 48'000U;
+  fragment.bar_count = bars;
+  fragment.melodic_fingerprint = melodic_fingerprint;
+  fragment.harmonic_fingerprint = 1'000U + id;
+  fragment.rhythmic_fingerprint = 2'000U + id;
+  fragment.groove_fingerprint = 3'000U + id;
+  fragment.arrangement_fingerprint =
+      arrangement_fingerprint == 0U ? 4'000U + id
+                                    : arrangement_fingerprint;
+  fragment.energy = 0.5F;
+  fragment.density = 0.5F;
+  fragment.loopability_score = 0.8F;
+  fragment.generation_confidence = 0.9F;
+  fragment.cache_available = true;
+  fragment.audible_layer_mask = 1ULL << (id % 8U);
+  fragment.source_identity = id;
+  fragment.variation_mask = 1U << (id % 4U);
+  return fragment;
+}
+
+[[nodiscard]] ar::ContinuationEdge continuation_edge(std::uint64_t from,
+                                                      std::uint64_t to) {
+  ar::ContinuationEdge edge;
+  edge.from_fragment_id = from;
+  edge.to_fragment_id = to;
+  edge.sample_boundary_continuity = 1.0F;
+  edge.phase_continuity = 1.0F;
+  edge.beat_alignment = 1.0F;
+  edge.chord_compatibility = 1.0F;
+  edge.key_compatibility = 1.0F;
+  edge.timbre_compatibility = 1.0F;
+  edge.groove_compatibility = 1.0F;
+  edge.energy_trajectory = 1.0F;
+  edge.stem_role_fit = 1.0F;
+  edge.masking_fit = 1.0F;
+  edge.latency_fit = 1.0F;
+  edge.cache_fit = 1.0F;
+  return edge;
+}
+
+[[nodiscard]] ar::PlannedFragment planned_fragment(
+    ar::FragmentDescriptor fragment, std::uint32_t start_bar) {
+  ar::PlannedFragment result;
+  result.bars_used = fragment.bar_count;
+  result.timeline_start_bar = start_bar;
+  result.fragment = std::move(fragment);
+  return result;
+}
+
+[[nodiscard]] ar::ProgressiveBufferConfig tiny_progressive_config() {
+  ar::ProgressiveBufferConfig config;
+  config.channels = 1U;
+  config.frames_per_bar = 1U;
+  config.committed_bars = 2U;
+  config.guaranteed_bars = 8U;
+  config.target_bars = 16U;
+  config.planning_bars = 32U;
+  config.low_watermark_bars = 8U;
+  config.high_watermark_bars = 16U;
+  return config;
+}
+
+[[nodiscard]] std::vector<float> constant_pcm(std::uint64_t frames,
+                                              std::uint32_t channels,
+                                              float value) {
+  return std::vector<float>(static_cast<std::size_t>(frames) * channels,
+                            value);
+}
+
+[[nodiscard]] std::vector<float> ramp_pcm(std::uint64_t start_frame,
+                                          std::uint64_t frames,
+                                          std::uint64_t total_frames) {
+  std::vector<float> result(static_cast<std::size_t>(frames));
+  for (std::uint64_t frame = 0U; frame < frames; ++frame) {
+    result[static_cast<std::size_t>(frame)] = static_cast<float>(
+        static_cast<double>(start_frame + frame + 1U) /
+        static_cast<double>(total_frames));
+  }
   return result;
 }
 
@@ -302,18 +394,21 @@ void test_loop_overlap_removes_raw_wrap_jump() {
     owned.source_a[frame * 2U + 1U] = sample;
   }
   const std::vector<ar::StemInput> stems{owned.view()};
-  ar::TimelineEvent event{ar::SourceKind::SourceA, 0U, 0U, 256U,
+  ar::TimelineEvent event{ar::SourceKind::SourceA, 0U, 0U, 384U,
                           ar::AutomationLane(1.0F),
                           ar::AutomationLane(0.0F)};
+  event.playback_policy = ar::SourcePlaybackPolicy::RepeatOnce;
   ar::BridgePlan plan;
   plan.timeline = ar::ProjectTimeline(
       {ar::StemTimeline(1U, ar::StemRole::Atmosphere, {event})});
   plan.anchor_stem_id = 1U;
-  plan.total_frames = 256U;
+  plan.total_frames = 384U;
   const auto render = ar::BridgeRenderer{}.render(plan, stems, 48'000U);
   const auto jump = std::abs(render.interleaved[128U * 2U] -
                              render.interleaved[127U * 2U]);
   CHECK(jump < 0.2F);
+  CHECK(std::abs(render.interleaved[192U * 2U]) > 0.2F);
+  CHECK(std::abs(render.interleaved[300U * 2U]) < 1.0e-6F);
 }
 
 void test_quality_diagnostics_are_specific() {
@@ -795,6 +890,520 @@ void test_deterministic_fuzz_properties() {
   }
 }
 
+void test_progressive_state_machine_activation_rules() {
+  ar::TransitionCoordinator coordinator(8U);
+  CHECK(coordinator.select_target(42U));
+  CHECK(coordinator.state() == ar::TransitionState::TARGET_SELECTED);
+  CHECK(coordinator.begin_preparing());
+  CHECK(coordinator.state() == ar::TransitionState::PREPARING);
+
+  CHECK(coordinator.set_activation_boundaries(coordinator.generation(), 42U,
+                                              {100U, 200U, 300U}));
+  CHECK(!coordinator.advance_playback(100U));
+  CHECK(!coordinator.wait_for_activation_boundary());
+  CHECK(!coordinator.arm(0U));
+  CHECK(coordinator.state() == ar::TransitionState::PREPARING);
+
+  ar::TransitionCandidate invalid;
+  invalid.candidate_id = 1U;
+  invalid.generation = coordinator.generation();
+  invalid.target_track_id = 42U;
+  invalid.level = ar::CandidateLevel::LEVEL_0;
+  invalid.rendered_frames = 8U;
+  invalid.quality_score = 1.0;
+  invalid.technically_valid = false;
+  invalid.repetition_valid = true;
+  CHECK(!coordinator.publish_candidate(invalid));
+  CHECK(coordinator.state() == ar::TransitionState::PREPARING);
+
+  auto valid = invalid;
+  valid.candidate_id = 2U;
+  valid.technically_valid = true;
+  CHECK(coordinator.publish_candidate(valid));
+  CHECK(coordinator.state() == ar::TransitionState::FALLBACK_READY);
+  CHECK(coordinator.arm(50U));
+  CHECK(coordinator.state() == ar::TransitionState::ARMED);
+  CHECK(coordinator.wait_for_activation_boundary());
+  CHECK(coordinator.state() ==
+        ar::TransitionState::WAITING_FOR_ACTIVATION_BOUNDARY);
+
+  CHECK(!coordinator.advance_playback(150U));
+  CHECK(coordinator.state() ==
+        ar::TransitionState::WAITING_FOR_ACTIVATION_BOUNDARY);
+  ar::ProgressivePcmBuffer buffer(tiny_progressive_config());
+  CHECK(buffer.append_deterministic(constant_pcm(8U, 1U, 0.1F)));
+  const auto missed = coordinator.diagnostics(buffer);
+  CHECK(missed.missed_activation_boundaries == 1U);
+  CHECK(missed.next_activation_boundary_frame == 200U);
+
+  CHECK(coordinator.advance_playback(200U));
+  CHECK(coordinator.state() == ar::TransitionState::TRANSITIONING);
+}
+
+void test_transition_rejects_stale_and_short_candidates() {
+  ar::TransitionCoordinator coordinator(8U);
+  CHECK(!coordinator.select_target(0U));
+  CHECK(coordinator.select_target(41U));
+  CHECK(coordinator.begin_preparing());
+  const auto stale_generation = coordinator.generation();
+  CHECK(coordinator.set_activation_boundaries(stale_generation, 41U, {10U}));
+
+  ar::TransitionCandidate stale;
+  stale.candidate_id = 1U;
+  stale.generation = coordinator.generation();
+  stale.target_track_id = 41U;
+  stale.level = ar::CandidateLevel::LEVEL_0;
+  stale.rendered_frames = 8U;
+  stale.quality_score = 1.0;
+  stale.technically_valid = true;
+  stale.repetition_valid = true;
+
+  CHECK(coordinator.select_target(42U));
+  CHECK(coordinator.begin_preparing());
+  CHECK(!coordinator.set_activation_boundaries(stale_generation, 41U, {10U}));
+  CHECK(!coordinator.publish_candidate(stale));
+
+  auto current = stale;
+  current.candidate_id = 2U;
+  current.generation = coordinator.generation();
+  current.target_track_id = 42U;
+  current.rendered_frames = 7U;
+  CHECK(!coordinator.publish_candidate(current));
+  current.rendered_frames = 8U;
+  CHECK(coordinator.publish_candidate(current));
+  CHECK(coordinator.arm(0U));
+  CHECK(!coordinator.wait_for_activation_boundary());
+
+  CHECK(coordinator.set_activation_boundaries(coordinator.generation(), 42U,
+                                              {20U}));
+  CHECK(coordinator.wait_for_activation_boundary());
+  auto short_upgrade = current;
+  short_upgrade.candidate_id = 3U;
+  short_upgrade.level = ar::CandidateLevel::LEVEL_2;
+  short_upgrade.rendered_frames = 1U;
+  short_upgrade.quality_score = 2.0;
+  CHECK(!coordinator.publish_candidate(short_upgrade));
+  CHECK(coordinator.advance_playback(20U));
+}
+
+void test_preprocessed_track_rejects_bad_indexes_and_bounded_counts() {
+  ar::PreprocessedTrack track;
+  track.track_id = 7U;
+  CHECK(track.continuation_graph.add_fragment(make_fragment(1U, 1U, 11U)));
+  track.entry_port_fragment_ids = {1U};
+  track.exit_port_fragment_ids = {1U};
+  CHECK(track.valid());
+
+  const auto bytes = track.serialize();
+  CHECK(!bytes.empty());
+  const auto round_trip = ar::PreprocessedTrack::deserialize(bytes);
+  CHECK(round_trip.has_value());
+  CHECK(round_trip->valid());
+
+  track.entry_port_fragment_ids = {999U};
+  CHECK(!track.valid());
+  CHECK(track.serialize().empty());
+
+  track.entry_port_fragment_ids.assign(1'000'001U, 1U);
+  CHECK(!track.valid());
+  CHECK(track.serialize().empty());
+
+  auto hostile_count = bytes;
+  CHECK(hostile_count.size() > 36U);
+  constexpr std::uint32_t excessive_count = 1'000'000U;
+  for (std::size_t index = 0U; index < 4U; ++index) {
+    hostile_count[32U + index] = static_cast<std::uint8_t>(
+        (excessive_count >> (index * 8U)) & 0xFFU);
+  }
+  CHECK(!ar::PreprocessedTrack::deserialize(hostile_count).has_value());
+}
+
+void test_anonymized_debug_report_has_no_media_payload() {
+  ar::TransitionDiagnosticsSnapshot snapshot;
+  snapshot.state = ar::TransitionState::ARMED;
+  snapshot.natural_runway_remaining_frames = 123U;
+  snapshot.guaranteed_rendered_horizon_frames = 456U;
+  snapshot.recent_fragment_ids = {7U, 8U};
+  snapshot.fallback_reason = "neural timeout\nusing deterministic fallback";
+
+  const auto report = ar::anonymized_debug_report(snapshot);
+  CHECK(report.find("state=ARMED") != std::string::npos);
+  CHECK(report.find("recent_fragment_ids=7,8") != std::string::npos);
+  CHECK(report.find("fallback_reason=neural timeout using deterministic fallback") !=
+        std::string::npos);
+  CHECK(report.find("track_id") == std::string::npos);
+  CHECK(report.find("audio=") == std::string::npos);
+}
+
+void test_continuation_excludes_recent_repetition() {
+  ar::ContinuationReservoir reservoir;
+  for (std::uint64_t id = 1U; id <= 5U; ++id) {
+    CHECK(reservoir.add_fragment(make_fragment(id, 4U, id * 10U)));
+  }
+  CHECK(!reservoir.add_edge(continuation_edge(1U, 1U)));
+  for (std::uint64_t from = 1U; from <= 5U; ++from) {
+    for (std::uint64_t to = 2U; to <= 5U; ++to) {
+      if (from != to) {
+        CHECK(reservoir.add_edge(continuation_edge(from, to)));
+      }
+    }
+  }
+
+  ar::ContinuationContext context;
+  context.current_fragment_id = 1U;
+  context.track_id = 7U;
+  context.stem_role = ar::StemRole::Harmony;
+  ar::DeviceBudget budget;
+  budget.max_candidates = 8U;
+  budget.max_expansions = 64U;
+  const auto candidates = reservoir.get_candidates(
+      context, 4U, {2U}, {30U}, context, budget);
+  CHECK(!candidates.empty());
+  CHECK(std::all_of(candidates.begin(), candidates.end(),
+                    [](const ar::FragmentDescriptor &fragment) {
+                      return fragment.fragment_id != 1U &&
+                             fragment.fragment_id != 2U &&
+                             fragment.melodic_fingerprint != 30U;
+                    }));
+
+  ar::ContinuationPlanningRequest request;
+  request.current_context = context;
+  request.target_context = context;
+  request.target_bars = 16U;
+  request.beam_width = 8U;
+  request.max_expansions = 64U;
+  request.fragment_reuse_window = 8U;
+  request.fingerprint_window = 8U;
+  request.device_budget = budget;
+  const auto plan = ar::NonRepeatingContinuationPlanner{}.plan(reservoir,
+                                                               request);
+  CHECK(plan.complete);
+  CHECK(plan.total_bars >= request.target_bars);
+  CHECK(plan.expansions <= request.max_expansions);
+  for (std::size_t index = 0U; index < plan.fragments.size(); ++index) {
+    CHECK(plan.fragments[index].fragment.fragment_id != 1U);
+    const auto window_start =
+        index > request.fragment_reuse_window
+            ? index - request.fragment_reuse_window
+            : 0U;
+    for (std::size_t prior = window_start; prior < index; ++prior) {
+      CHECK(plan.fragments[index].fragment.fragment_id !=
+            plan.fragments[prior].fragment.fragment_id);
+    }
+    const auto fingerprint_start =
+        index > request.fingerprint_window ? index - request.fingerprint_window
+                                           : 0U;
+    for (std::size_t prior = fingerprint_start; prior < index; ++prior) {
+      CHECK(plan.fragments[index].fragment.melodic_fingerprint !=
+            plan.fragments[prior].fragment.melodic_fingerprint);
+    }
+  }
+
+  auto reuse_request = request;
+  reuse_request.target_bars = 20U;
+  reuse_request.max_expansions = 256U;
+  reuse_request.fragment_reuse_window = 2U;
+  reuse_request.fingerprint_window = 2U;
+  reuse_request.anchor_fragment_id = 2U;
+  reuse_request.device_budget.max_expansions = 256U;
+  const auto reuse_plan =
+      ar::NonRepeatingContinuationPlanner{}.plan(reservoir, reuse_request);
+  CHECK(reuse_plan.complete);
+  CHECK(reuse_plan.total_bars == reuse_request.target_bars);
+  std::unordered_set<std::uint64_t> seen_ids;
+  bool reused = false;
+  std::size_t anchor_uses = 0U;
+  for (std::size_t index = 0U; index < reuse_plan.fragments.size(); ++index) {
+    const auto id = reuse_plan.fragments[index].fragment.fragment_id;
+    reused = reused || !seen_ids.insert(id).second;
+    anchor_uses += id == reuse_request.anchor_fragment_id ? 1U : 0U;
+    const auto start = index > reuse_request.fragment_reuse_window
+                           ? index - reuse_request.fragment_reuse_window
+                           : 0U;
+    for (std::size_t prior = start; prior < index; ++prior) {
+      CHECK(id != reuse_plan.fragments[prior].fragment.fragment_id);
+    }
+  }
+  CHECK(reused);
+  CHECK(anchor_uses <= 2U);
+
+  ar::ContinuationReservoir no_variation;
+  for (std::uint64_t id = 1U; id <= 5U; ++id) {
+    auto fragment = make_fragment(id, 4U, id * 10U);
+    fragment.variation_mask = 0U;
+    CHECK(no_variation.add_fragment(std::move(fragment)));
+  }
+  for (std::uint64_t from = 1U; from <= 5U; ++from) {
+    for (std::uint64_t to = 2U; to <= 5U; ++to) {
+      if (from != to) {
+        CHECK(no_variation.add_edge(continuation_edge(from, to)));
+      }
+    }
+  }
+  CHECK(!ar::NonRepeatingContinuationPlanner{}
+             .plan(no_variation, reuse_request)
+             .complete);
+
+  ar::ContinuationReservoir unchanged_layers;
+  for (std::uint64_t id = 1U; id <= 5U; ++id) {
+    auto fragment = make_fragment(id, 4U, id * 10U);
+    fragment.audible_layer_mask = 1U;
+    CHECK(unchanged_layers.add_fragment(std::move(fragment)));
+  }
+  for (std::uint64_t from = 1U; from <= 5U; ++from) {
+    for (std::uint64_t to = 1U; to <= 5U; ++to) {
+      if (from != to) {
+        CHECK(unchanged_layers.add_edge(continuation_edge(from, to)));
+      }
+    }
+  }
+  CHECK(!ar::NonRepeatingContinuationPlanner{}
+             .plan(unchanged_layers, reuse_request)
+             .complete);
+
+  ar::ContinuationReservoir current_anchor_reservoir;
+  for (std::uint64_t id = 1U; id <= 5U; ++id) {
+    auto fragment = make_fragment(id, 4U, id * 100U);
+    if (id != 1U) {
+      fragment.cache_available = false;
+      fragment.generation_confidence = 0.0F;
+      fragment.generation_latency_seconds = 10.0F;
+      fragment.loopability_score = 0.0F;
+    }
+    CHECK(current_anchor_reservoir.add_fragment(std::move(fragment)));
+  }
+  for (std::uint64_t from = 1U; from <= 5U; ++from) {
+    for (std::uint64_t to = 1U; to <= 5U; ++to) {
+      if (from != to) {
+        CHECK(current_anchor_reservoir.add_edge(continuation_edge(from, to)));
+      }
+    }
+  }
+  auto current_anchor_request = reuse_request;
+  current_anchor_request.current_context.current_fragment_id = 1U;
+  current_anchor_request.anchor_fragment_id = 1U;
+  current_anchor_request.fragment_reuse_window = 1U;
+  current_anchor_request.fingerprint_window = 1U;
+  current_anchor_request.beam_width = 16U;
+  current_anchor_request.max_expansions = 512U;
+  current_anchor_request.device_budget.max_expansions = 512U;
+  const auto current_anchor_plan = ar::NonRepeatingContinuationPlanner{}.plan(
+      current_anchor_reservoir, current_anchor_request);
+  CHECK(current_anchor_plan.complete);
+  CHECK(std::count_if(current_anchor_plan.fragments.begin(),
+                      current_anchor_plan.fragments.end(),
+                      [](const ar::PlannedFragment &fragment) {
+                        return fragment.fragment.fragment_id == 1U;
+                      }) == 1);
+}
+
+void test_repetition_metrics_require_novelty() {
+  std::vector<ar::PlannedFragment> diverse;
+  std::vector<ar::PlannedFragment> repeated;
+  std::vector<ar::PlannedFragment> repeated_arrangement;
+  for (std::uint32_t bar = 0U; bar < 5U; ++bar) {
+    diverse.push_back(planned_fragment(
+        make_fragment(10U + bar, 1U, 100U + bar, 200U + bar), bar));
+    repeated.push_back(
+        planned_fragment(make_fragment(20U, 1U, 300U, 400U), bar));
+    repeated_arrangement.push_back(planned_fragment(
+        make_fragment(30U + bar, 1U, 500U + bar, 600U), bar));
+  }
+
+  const ar::RepetitionQualityEvaluator evaluator;
+  const auto good = evaluator.evaluate(diverse);
+  const auto bad = evaluator.evaluate(repeated);
+  const auto stale_arrangement = evaluator.evaluate(repeated_arrangement);
+  CHECK(good.accepted);
+  CHECK(good.metrics.exact_fragment_repeat_rate == 0.0F);
+  CHECK(good.metrics.full_arrangement_repeat_rate == 0.0F);
+  CHECK(good.metrics.novelty_per_bar > 0.5F);
+  CHECK(!bad.accepted);
+  CHECK(bad.metrics.exact_fragment_repeat_rate >
+        good.metrics.exact_fragment_repeat_rate);
+  CHECK(bad.metrics.longest_identical_run_bars >= 4U);
+  CHECK(bad.metrics.novelty_per_bar < good.metrics.novelty_per_bar);
+  CHECK(!stale_arrangement.accepted);
+  CHECK(stale_arrangement.metrics.full_arrangement_repeat_rate >
+        good.metrics.full_arrangement_repeat_rate);
+}
+
+void test_progressive_buffer_survives_slow_and_failed_neural() {
+  ar::ProgressivePcmBuffer buffer(tiny_progressive_config());
+  CHECK(buffer.append_deterministic(constant_pcm(16U, 1U, 0.1F),
+                                    ar::CandidateLevel::LEVEL_0, 1U));
+  CHECK(buffer.activation_ready());
+  const auto available_before_failure = buffer.available_frames();
+  CHECK(!buffer.replace_uncommitted_with_neural(
+      buffer.committed_end_frame(), {}, 90U));
+  CHECK(buffer.available_frames() == available_before_failure);
+
+  std::uint64_t candidate_id = 2U;
+  for (std::uint32_t second = 0U; second < 32U; ++second) {
+    if (buffer.needs_deterministic_recovery()) {
+      CHECK(buffer.append_deterministic(constant_pcm(8U, 1U, 0.2F),
+                                        ar::CandidateLevel::LEVEL_0,
+                                        candidate_id++));
+    }
+    CHECK(buffer.available_frames() >= 8U);
+    float sample = 0.0F;
+    CHECK(buffer.read(&sample, 1U) == 1U);
+    CHECK(std::isfinite(sample));
+  }
+  CHECK(buffer.diagnostics().neural_upgrades_applied == 0U);
+}
+
+void test_low_watermark_recovery_and_future_only_upgrade() {
+  ar::ProgressivePcmBuffer recovery(tiny_progressive_config());
+  CHECK(recovery.append_deterministic(constant_pcm(16U, 1U, 0.1F),
+                                      ar::CandidateLevel::LEVEL_0, 7U));
+  std::array<float, 9U> consumed{};
+  CHECK(recovery.read(consumed.data(), consumed.size()) == consumed.size());
+  CHECK(recovery.needs_deterministic_recovery());
+  CHECK(recovery.diagnostics().low_watermark_events >= 1U);
+  CHECK(!recovery.append_deterministic(constant_pcm(9U, 1U, 0.1F),
+                                       ar::CandidateLevel::LEVEL_0, 7U));
+  CHECK(recovery.append_deterministic(constant_pcm(9U, 1U, 0.2F),
+                                      ar::CandidateLevel::LEVEL_0, 8U));
+  CHECK(!recovery.needs_deterministic_recovery());
+
+  ar::ProgressivePcmBuffer upgrade(tiny_progressive_config());
+  CHECK(upgrade.append_deterministic(constant_pcm(16U, 1U, 0.1F),
+                                     ar::CandidateLevel::LEVEL_0, 1U));
+  const auto committed_end = upgrade.committed_end_frame();
+  CHECK(committed_end == 2U);
+  CHECK(!upgrade.replace_uncommitted_with_neural(
+      committed_end - 1U, constant_pcm(4U, 1U, 0.12F), 2U));
+  CHECK(upgrade.replace_uncommitted_with_neural(
+      committed_end, constant_pcm(4U, 1U, 0.12F), 2U));
+
+  std::array<float, 16U> rendered{};
+  CHECK(upgrade.read(rendered.data(), rendered.size()) == rendered.size());
+  CHECK(rendered[0] == 0.1F && rendered[1] == 0.1F);
+  CHECK(std::abs(rendered[2] - 0.1F) < 1.0e-6F);
+  CHECK(std::abs(rendered[5] - 0.1F) < 1.0e-6F);
+  CHECK(rendered[6] == 0.1F);
+  float maximum_upgrade_jump = 0.0F;
+  for (std::size_t index = 1U; index < rendered.size(); ++index) {
+    maximum_upgrade_jump = std::max(
+        maximum_upgrade_jump,
+        std::abs(rendered[index] - rendered[index - 1U]));
+  }
+  CHECK(maximum_upgrade_jump < 0.021F);
+  const auto upgraded = upgrade.diagnostics();
+  CHECK(upgraded.neural_upgrades_applied == 1U);
+  CHECK(upgraded.active_candidate_level == ar::CandidateLevel::LEVEL_2);
+}
+
+void test_neural_upgrade_aligns_loudness_phase_and_boundaries() {
+  ar::ProgressiveBufferConfig config;
+  config.channels = 1U;
+  config.frames_per_bar = 4U;
+  config.committed_bars = 1U;
+  config.guaranteed_bars = 2U;
+  config.target_bars = 4U;
+  config.planning_bars = 8U;
+  config.low_watermark_bars = 2U;
+  config.high_watermark_bars = 4U;
+  ar::ProgressivePcmBuffer buffer(config);
+  CHECK(buffer.append_deterministic(constant_pcm(32U, 1U, 0.8F),
+                                    ar::CandidateLevel::LEVEL_0, 1U));
+  CHECK(buffer.replace_uncommitted_with_neural(
+      buffer.committed_end_frame(), constant_pcm(16U, 1U, -0.2F), 2U));
+
+  std::array<float, 32U> rendered{};
+  CHECK(buffer.read(rendered.data(), rendered.size()) == rendered.size());
+  CHECK(std::abs(rendered[3] - 0.8F) < 1.0e-6F);
+  CHECK(std::abs(rendered[4] - 0.8F) < 1.0e-6F);
+  CHECK(std::abs(rendered[7] - 0.4F) < 1.0e-6F);
+  CHECK(std::abs(rendered[19] - 0.8F) < 1.0e-6F);
+  CHECK(std::abs(rendered[20] - 0.8F) < 1.0e-6F);
+  float maximum_jump = 0.0F;
+  for (std::size_t index = 1U; index < rendered.size(); ++index) {
+    maximum_jump =
+        std::max(maximum_jump, std::abs(rendered[index] - rendered[index - 1U]));
+  }
+  CHECK(maximum_jump < 0.21F);
+}
+
+void test_ninety_second_progressive_golden_scenario() {
+  constexpr std::uint64_t natural_runway_seconds = 35U;
+  constexpr std::uint64_t continuation_seconds = 55U;
+  constexpr std::uint64_t neural_generation_seconds = 90U;
+  static_assert(natural_runway_seconds + continuation_seconds ==
+                neural_generation_seconds);
+
+  ar::ProgressivePcmBuffer buffer(tiny_progressive_config());
+  CHECK(buffer.append_deterministic(
+      ramp_pcm(0U, 16U, continuation_seconds),
+      ar::CandidateLevel::LEVEL_0, 1U));
+
+  ar::TransitionCoordinator coordinator(8U);
+  CHECK(coordinator.select_target(99U));
+  CHECK(coordinator.begin_preparing());
+  coordinator.set_natural_runway_remaining(natural_runway_seconds);
+  coordinator.set_generation_eta(
+      static_cast<double>(neural_generation_seconds));
+  CHECK(coordinator.set_activation_boundaries(
+      coordinator.generation(), 99U, {natural_runway_seconds}));
+  ar::TransitionCandidate fallback;
+  fallback.candidate_id = 1U;
+  fallback.generation = coordinator.generation();
+  fallback.target_track_id = 99U;
+  fallback.level = ar::CandidateLevel::LEVEL_0;
+  fallback.rendered_frames = 16U;
+  fallback.quality_score = 1.0;
+  fallback.technically_valid = true;
+  fallback.repetition_valid = true;
+  CHECK(coordinator.publish_candidate(fallback));
+  CHECK(coordinator.arm(0U));
+  CHECK(coordinator.wait_for_activation_boundary());
+  for (std::uint64_t second = 0U; second < natural_runway_seconds; ++second) {
+    CHECK(!coordinator.advance_playback(second));
+  }
+  CHECK(coordinator.advance_playback(natural_runway_seconds));
+
+  std::vector<float> output;
+  output.reserve(continuation_seconds);
+  std::vector<ar::PlannedFragment> history;
+  history.reserve(continuation_seconds);
+  std::uint64_t candidate_id = 2U;
+  for (std::uint64_t second = 0U; second < continuation_seconds; ++second) {
+    if (buffer.needs_deterministic_recovery()) {
+      const auto start = buffer.rendered_end_frame();
+      CHECK(buffer.append_deterministic(
+          ramp_pcm(start, 8U, continuation_seconds),
+          ar::CandidateLevel::LEVEL_0, candidate_id++));
+    }
+    CHECK(buffer.available_frames() >= 8U);
+    float sample = 0.0F;
+    CHECK(buffer.read(&sample, 1U) == 1U);
+    output.push_back(sample);
+    history.push_back(planned_fragment(
+        make_fragment(second + 1U, 1U, 10'000U + second,
+                      20'000U + second),
+        static_cast<std::uint32_t>(second)));
+  }
+
+  const auto repetition = ar::RepetitionQualityEvaluator{}.evaluate(history);
+  CHECK(repetition.accepted);
+  CHECK(repetition.metrics.exact_fragment_repeat_rate == 0.0F);
+  CHECK(repetition.metrics.novelty_per_bar >= 0.25F);
+  CHECK(output.size() == continuation_seconds);
+  CHECK(std::is_sorted(output.begin(), output.end()));
+  CHECK(output.front() < 0.1F);
+  CHECK(output.back() >= 0.99F);
+  float maximum_jump = 0.0F;
+  for (std::size_t index = 1U; index < output.size(); ++index) {
+    maximum_jump =
+        std::max(maximum_jump, std::abs(output[index] - output[index - 1U]));
+  }
+  CHECK(maximum_jump < 0.02F);
+  CHECK(buffer.diagnostics().neural_upgrades_applied == 0U);
+  CHECK(coordinator.land());
+  CHECK(coordinator.state() == ar::TransitionState::LANDED);
+}
+
 } // namespace
 
 int main() {
@@ -827,6 +1436,26 @@ int main() {
        test_capability_cache_and_recommendation_primitives},
       {"stable_c_api", test_stable_c_api},
       {"deterministic_fuzz_properties", test_deterministic_fuzz_properties},
+      {"progressive_state_machine_activation_rules",
+       test_progressive_state_machine_activation_rules},
+      {"transition_rejects_stale_and_short_candidates",
+       test_transition_rejects_stale_and_short_candidates},
+      {"preprocessed_track_rejects_bad_indexes_and_bounded_counts",
+       test_preprocessed_track_rejects_bad_indexes_and_bounded_counts},
+      {"anonymized_debug_report_has_no_media_payload",
+       test_anonymized_debug_report_has_no_media_payload},
+      {"continuation_excludes_recent_repetition",
+       test_continuation_excludes_recent_repetition},
+      {"repetition_metrics_require_novelty",
+       test_repetition_metrics_require_novelty},
+      {"progressive_buffer_survives_slow_and_failed_neural",
+       test_progressive_buffer_survives_slow_and_failed_neural},
+      {"low_watermark_recovery_and_future_only_upgrade",
+       test_low_watermark_recovery_and_future_only_upgrade},
+      {"neural_upgrade_aligns_loudness_phase_and_boundaries",
+       test_neural_upgrade_aligns_loudness_phase_and_boundaries},
+      {"ninety_second_progressive_golden_scenario",
+       test_ninety_second_progressive_golden_scenario},
   };
 
   std::size_t failures = 0U;

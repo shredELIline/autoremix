@@ -19,12 +19,16 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -45,6 +49,7 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
     public static final String ACTION_DISLIKE = "com.alexey.autoremix.DISLIKE";
     public static final String ACTION_SEEK = "com.alexey.autoremix.SEEK";
     public static final String ACTION_STORAGE_BUDGET = "com.alexey.autoremix.STORAGE_BUDGET";
+    public static final String ACTION_EXPORT_DEBUG = "com.alexey.autoremix.EXPORT_DEBUG";
     public static final String ACTION_STOP = "com.alexey.autoremix.STOP";
     public static final String EXTRA_CHAOS = "chaos";
     public static final String EXTRA_OVERLAYS = "overlays";
@@ -72,40 +77,74 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
     public static volatile long cacheBytes;
     public static volatile boolean nativeOutputActive;
     public static volatile boolean transitionInProgress;
+    public static volatile String transitionState = TransitionStateMachine.State.IDLE.name();
+    public static volatile long guaranteedRenderedHorizonMs;
+    public static volatile int outputUnderruns;
+    public static volatile int bufferLowWatermarkEvents;
+    public static volatile int missedActivationBoundaries;
+    public static volatile int activeCandidateLevel = -1;
+    public static volatile long naturalRunwayRemainingMs;
+    public static volatile long committedHorizonMs;
+    public static volatile long planningHorizonMs;
+    public static volatile float repetitionScore;
+    public static volatile float noveltyScore = 1f;
+    public static volatile String recentFragmentIds = "";
+    public static volatile int neuralUpgradesApplied;
+    public static volatile String fallbackReason = "none";
 
     private static final int NOTIFICATION_ID = 903;
     private static final String CHANNEL = "autoremix_pcm";
+    private static final long RUNWAY_CHUNK_MS = 20_000L;
+    private static final long FALLBACK_BRIDGE_MS = 12_000L;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private final ExecutorService enhancementWorker = Executors.newSingleThreadExecutor();
     private final AtomicBoolean renderTaskPending = new AtomicBoolean();
+    private final AtomicBoolean renderAgain = new AtomicBoolean();
     private final AtomicInteger planEpoch = new AtomicInteger();
+    private final AtomicInteger enhancementSerial = new AtomicInteger();
+    private final Object planControl = new Object();
+    private final TransitionStateMachine transitionMachine = new TransitionStateMachine();
     private final Map<Long, TrackAnalysis> cache = new ConcurrentHashMap<>();
     private final Random random = new Random();
     private final Deque<Long> recent = new ArrayDeque<>();
+    private final Deque<Long> recentContinuationSources = new ArrayDeque<>();
+    private final Deque<Long> recentContinuationMelodies = new ArrayDeque<>();
+    private final Set<Long> usedContinuationSources = new HashSet<>();
+    private final Set<Long> usedContinuationFragments = new HashSet<>();
+    private final Map<Long, Integer> continuationSourceUses = new ConcurrentHashMap<>();
+    private final Deque<ContinuationReservoir.Fragment> continuationHistory =
+            new ArrayDeque<>();
 
     private List<Track> library = new ArrayList<>();
     private SceneAudioPlayer player;
     private AutoRemixSessionPlayer sessionPlayer;
     private MediaSession mediaSession;
-    private Track planningTrack;
-    private TrackAnalysis planningAnalysis;
-    private TrackAnalysis.Fragment planningFragment;
-    private long planningPositionMs;
+    private volatile Track planningTrack;
+    private volatile TrackAnalysis planningAnalysis;
+    private volatile TrackAnalysis.Fragment planningFragment;
+    private volatile long planningPositionMs;
     private int chaos = 62;
     private int patience = 82;
     private boolean overlays = true;
     private boolean harmonic = true;
     private int sequence;
-    private int generation;
+    private volatile int generation;
     private volatile long sceneStartedAt;
     private volatile long sceneDurationMs = 1L;
     private volatile boolean replanAfterCurrent;
     private volatile RenderedScene activeScene;
+    private volatile RenderedScene transitioningScene;
     private int pendingNextCount;
     private volatile int candidateOffset;
     private volatile long forcedTargetId = -1L;
-    private long previousAnchorId = -1L;
+    private volatile long previousAnchorId = -1L;
     private volatile boolean manualEscapePending;
+    private volatile boolean belowLowWatermark;
+    private volatile Future<?> enhancementTask;
+    private long continuationTrackId = -1L;
+    private long continuationFragmentId;
+    private long continuationAnchorSourceId;
 
     private final Runnable settleNext = () -> {
         if (!running || player == null) return;
@@ -175,6 +214,12 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
                 stopSelf(startId);
                 return START_NOT_STICKY;
             }
+        } else if (ACTION_EXPORT_DEBUG.equals(action)) {
+            shareDebugReport();
+            if (!running) {
+                stopSelf(startId);
+                return START_NOT_STICKY;
+            }
         } else if (ACTION_STOP.equals(action)) {
             stopEngine();
             stopSelf();
@@ -185,6 +230,18 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
     }
 
     private void startEngine() {
+        synchronized (planControl) {
+            cancelEnhancementLocked();
+            recentContinuationSources.clear();
+            recentContinuationMelodies.clear();
+            usedContinuationSources.clear();
+            usedContinuationFragments.clear();
+            continuationSourceUses.clear();
+            continuationHistory.clear();
+            continuationTrackId = -1L;
+            continuationFragmentId = 0L;
+            continuationAnchorSourceId = 0L;
+        }
         stopAudioOnly();
         int token = ++generation;
         running = true;
@@ -194,9 +251,12 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
         pendingNextCount = 0;
         candidateOffset = 0;
         manualEscapePending = false;
+        transitionMachine.reset();
+        belowLowWatermark = false;
         forcedTargetId = -1L;
         previousAnchorId = -1L;
         activeScene = null;
+        transitioningScene = null;
         recent.clear();
         cache.clear();
         analyzedCount = AnalysisCacheStore.entryCount(this);
@@ -206,6 +266,20 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
         nativeOutputActive = false;
         transitionInProgress = false;
         transitionReadiness = 0;
+        transitionState = TransitionStateMachine.State.IDLE.name();
+        guaranteedRenderedHorizonMs = 0L;
+        outputUnderruns = 0;
+        bufferLowWatermarkEvents = 0;
+        missedActivationBoundaries = 0;
+        activeCandidateLevel = -1;
+        naturalRunwayRemainingMs = 0L;
+        committedHorizonMs = 0L;
+        planningHorizonMs = 0L;
+        repetitionScore = 0f;
+        noveltyScore = 1f;
+        recentFragmentIds = "";
+        neuralUpgradesApplied = 0;
+        fallbackReason = "none";
         queueSnapshot = "";
         feedbackState = 0;
         status = "Сканирую локальную медиатеку…";
@@ -221,6 +295,7 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
     }
 
     private void bootstrap(int token) {
+        int epoch = planEpoch.get();
         try {
             List<Track> found = MusicLibrary.scan(this);
             if (token != generation) return;
@@ -238,14 +313,19 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
                 currentTrack = first.displayName();
                 currentMeta = analysis.summary() + " · " + analysis.vibeSummary();
             });
-            RenderedScene prelude = SceneRenderer.renderPrelude(this, first, analysis, fragment, 52_000L);
-            if (token != generation || !running) return;
-            planningTrack = prelude.anchorTrack;
-            planningAnalysis = prelude.anchorAnalysis;
-            planningFragment = prelude.anchorFragment;
-            planningPositionMs = prelude.anchorPositionMs;
-            remember(first.id);
-            if (!player.offer(prelude)) throw new IllegalStateException("PCM queue rejected prelude");
+            RenderedScene prelude = SceneRenderer.renderPrelude(this, first, analysis, fragment, 52_000L)
+                    .forPlan(token, epoch);
+            synchronized (planControl) {
+                if (!isCurrentPlan(token, epoch)) return;
+                planningTrack = prelude.anchorTrack;
+                planningAnalysis = prelude.anchorAnalysis;
+                planningFragment = prelude.anchorFragment;
+                planningPositionMs = prelude.anchorPositionMs;
+                remember(first.id);
+                if (!player.offer(prelude)) {
+                    throw new IllegalStateException("PCM queue rejected prelude");
+                }
+            }
             main.post(() -> {
                 status = "Играет сольный участок; строю stem-переход заранее";
                 nextTrack = "Анализирую песни того же вайба…";
@@ -259,109 +339,472 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
     }
 
     private void scheduleRenderAhead(int token) {
-        if (!running || token != generation || player == null || player.queuedScenes() >= 1) return;
-        if (!renderTaskPending.compareAndSet(false, true)) return;
+        if (!running || token != generation || player == null) return;
+        if (!renderTaskPending.compareAndSet(false, true)) {
+            renderAgain.set(true);
+            return;
+        }
         worker.submit(() -> {
             try {
                 renderAhead(token);
             } finally {
                 renderTaskPending.set(false);
+                if (renderAgain.getAndSet(false) && running && token == generation) {
+                    scheduleRenderAhead(token);
+                }
             }
         });
     }
 
     private void renderAhead(int token) {
-        int failedScenes = 0;
-        while (running && token == generation && player != null && player.queuedScenes() < 1) {
-            int epoch = planEpoch.get();
-            Track outgoingTrack = planningTrack;
-            TrackAnalysis outgoingAnalysis = planningAnalysis;
-            TrackAnalysis.Fragment outgoingFragment = planningFragment;
-            long outgoingPositionMs = planningPositionMs;
-            if (outgoingTrack == null || outgoingAnalysis == null || outgoingFragment == null) return;
-            transitionReadiness = 12;
-            Candidate candidate = chooseCandidate(outgoingTrack, outgoingAnalysis, outgoingFragment);
-            if (candidate == null) {
-                candidate = chooseEmergencyCandidate(outgoingTrack, outgoingAnalysis, outgoingFragment);
-            }
-            boolean escapeScene = manualEscapePending;
-            RenderedScene scene;
+        if (!running || token != generation || player == null) return;
+        int epoch = planEpoch.get();
+        TransitionStateMachine.State lifecycle = transitionMachine.state();
+        if ((lifecycle == TransitionStateMachine.State.WAITING_FOR_ACTIVATION_BOUNDARY
+                && player.bufferedHorizonMs() >= lowWatermarkMs())
+                || lifecycle == TransitionStateMachine.State.ARMED
+                || lifecycle == TransitionStateMachine.State.FALLBACK_READY
+                || lifecycle == TransitionStateMachine.State.NEURAL_CANDIDATES_PENDING
+                || lifecycle == TransitionStateMachine.State.PREPARING
+                || lifecycle == TransitionStateMachine.State.TARGET_SELECTED) return;
+
+        fillNaturalRunway(token, epoch);
+        if (!running || token != generation || epoch != planEpoch.get() || player == null) return;
+        if (transitionMachine.state() == TransitionStateMachine.State.TRANSITIONING
+                || transitionMachine.state()
+                == TransitionStateMachine.State.WAITING_FOR_ACTIVATION_BOUNDARY) return;
+
+        Track outgoingTrack;
+        TrackAnalysis outgoingAnalysis;
+        TrackAnalysis.Fragment outgoingFragment;
+        long outgoingPositionMs;
+        synchronized (planControl) {
+            if (!isCurrentPlan(token, epoch)) return;
+            outgoingTrack = planningTrack;
+            outgoingAnalysis = planningAnalysis;
+            outgoingFragment = planningFragment;
+            outgoingPositionMs = planningPositionMs;
+        }
+        if (outgoingTrack == null || outgoingAnalysis == null || outgoingFragment == null) return;
+
+        Candidate candidate = chooseCandidate(outgoingTrack, outgoingAnalysis, outgoingFragment);
+        boolean enhancedEligible = candidate != null;
+        if (candidate == null) {
+            candidate = chooseEmergencyCandidate(outgoingTrack, outgoingAnalysis, outgoingFragment);
+            fallbackReason = "preprocessed pair unavailable; instant Level 0";
+        } else {
+            fallbackReason = "instant Level 0 while enhanced candidate renders";
+        }
+        if (candidate == null) {
+            retryRenderLater(token);
+            return;
+        }
+
+        boolean escapeScene = manualEscapePending;
+        synchronized (planControl) {
+            if (!isCurrentPlan(token, epoch)) return;
+            transitionMachine.selectTarget();
+            publishTransitionState();
+            transitionMachine.beginPreparing();
+            publishTransitionState();
+        }
+        final Candidate selected = candidate;
+        main.post(() -> {
+            if (!isCurrentPlan(token, epoch)) return;
+            nextTrack = selected.track.displayName() + " · vibe "
+                    + Math.round(selected.plan.vibeScore * 100f) + "%";
+            transition = selected.plan.type.label + " · " + selected.plan.reason;
+            status = "Preparing deterministic safety bridge";
+        });
+
+        RenderedScene boundaryRunway = null;
+        long activationPositionMs = nextBarBoundaryMs(
+                outgoingTrack, outgoingFragment, outgoingPositionMs);
+        if (activationPositionMs > outgoingPositionMs) {
             try {
-                if (candidate == null) {
-                    long available = outgoingTrack.durationMs - outgoingPositionMs;
-                    if (available < 8_000L) {
-                        retryRenderLater(token);
-                        return;
-                    }
-                    scene = SceneRenderer.renderContinuation(this, outgoingTrack, outgoingAnalysis,
-                            outgoingFragment, outgoingPositionMs, 36_000L,
-                            "Продолжаю текущий вайб: несовместимые песни пропущены");
-                } else {
-                    long soloMs = 50_000L + patience * 360L;
-                    final Candidate selected = candidate;
-                    main.post(() -> {
-                        nextTrack = selected.track.displayName() + " · vibe "
-                                + Math.round(selected.plan.vibeScore * 100f) + "%";
-                        transition = selected.plan.type.label + " · " + selected.plan.reason;
-                        status = "Декодирую и разделяю будущую сцену на слои…";
-                        transitionReadiness = 48;
-                    });
-                    if (escapeScene) {
-                        scene = SceneRenderer.renderEmergencyCrossfade(this,
-                                outgoingTrack, outgoingAnalysis, outgoingFragment, outgoingPositionMs,
-                                candidate.track, candidate.analysis, candidate.fragment, 8_000L);
-                    } else {
-                        scene = SceneRenderer.renderTransition(this,
-                                outgoingTrack, outgoingAnalysis, outgoingFragment, outgoingPositionMs,
-                                candidate.track, candidate.analysis, candidate.fragment, candidate.plan,
-                                soloMs);
-                    }
+                boundaryRunway = SceneRenderer.renderContinuation(this, outgoingTrack,
+                        outgoingAnalysis, outgoingFragment, outgoingPositionMs,
+                        activationPositionMs - outgoingPositionMs,
+                        "Natural runway to the next activation boundary").forPlan(token, epoch);
+                outgoingPositionMs = activationPositionMs;
+            } catch (Exception error) {
+                Log.w(TAG, "event=boundary_runway_failed anchor=" + outgoingTrack.id
+                        + " reason=" + error.getClass().getSimpleName(), error);
+                activationPositionMs = outgoingPositionMs;
+            }
+        }
+
+        RenderedScene fallback;
+        try {
+            fallback = SceneRenderer.renderEmergencyCrossfade(this,
+                    outgoingTrack, outgoingAnalysis, outgoingFragment, outgoingPositionMs,
+                    candidate.track, candidate.analysis, candidate.fragment, FALLBACK_BRIDGE_MS);
+        } catch (Exception error) {
+            Log.w(TAG, "event=fallback_render_failed anchor=" + outgoingTrack.id
+                    + " candidate=" + candidate.track.id
+                    + " reason=" + error.getClass().getSimpleName(), error);
+            failCurrentPlan(token, epoch);
+            retryRenderLater(token);
+            return;
+        }
+        if (!running || token != generation || epoch != planEpoch.get() || player == null) return;
+
+        long boundary = Math.round(activationPositionMs * SceneAudioPlayer.outputRate() / 1000.0);
+        fallback = fallback.asCandidate(boundary, 0, token, epoch);
+        boolean published = false;
+        synchronized (planControl) {
+            if (!isCurrentPlan(token, epoch)) return;
+            try {
+                transitionMachine.fallbackReady(fallback.validCandidate);
+                publishTransitionState();
+                if (enhancedEligible && !escapeScene) {
+                    transitionMachine.neuralCandidatesPending();
+                    publishTransitionState();
                 }
-            } catch (Exception renderError) {
-                Log.w(TAG, "event=scene_render_failed anchor=" + outgoingTrack.id
-                        + " candidate=" + (candidate == null ? -1L : candidate.track.id)
-                        + " reason=" + renderError.getClass().getSimpleName(), renderError);
-                remember(candidate == null ? outgoingTrack.id : candidate.track.id);
-                main.post(() -> status = "Пропускаю неудачную сцену: "
-                        + renderError.getClass().getSimpleName());
-                if (++failedScenes >= 3) {
-                    if (candidate == null) {
-                        retryRenderLater(token);
-                        return;
-                    }
-                    try {
-                        scene = SceneRenderer.renderEmergencyCrossfade(this,
-                                outgoingTrack, outgoingAnalysis, outgoingFragment, outgoingPositionMs,
-                                candidate.track, candidate.analysis, candidate.fragment, 8_000L);
-                    } catch (Exception fallbackError) {
-                        Log.w(TAG, "event=emergency_render_failed anchor=" + outgoingTrack.id
-                                + " candidate=" + candidate.track.id
-                                + " reason=" + fallbackError.getClass().getSimpleName(), fallbackError);
-                        retryRenderLater(token);
-                        return;
-                    }
+                transitionMachine.arm(boundary);
+                publishTransitionState();
+                transitionMachine.waitForActivationBoundary();
+                publishTransitionState();
+            } catch (IllegalStateException invalid) {
+                transitionMachine.fail();
+                publishTransitionState();
+            }
+            if (transitionMachine.state()
+                    == TransitionStateMachine.State.WAITING_FOR_ACTIVATION_BOUNDARY) {
+                boolean accepted = boundaryRunway == null
+                        ? player.offerAll(fallback)
+                        : player.offerAll(boundaryRunway, fallback);
+                if (accepted) {
+                    activeCandidateLevel = 0;
+                    planningTrack = fallback.anchorTrack;
+                    planningAnalysis = fallback.anchorAnalysis;
+                    planningFragment = fallback.anchorFragment;
+                    planningPositionMs = fallback.anchorPositionMs;
+                    remember(planningTrack.id);
+                    manualEscapePending = false;
+                    forcedTargetId = -1L;
+                    candidateOffset = 0;
+                    sequence++;
+                    guaranteedRenderedHorizonMs = player.bufferedHorizonMs();
+                    committedHorizonMs = Math.min(guaranteedRenderedHorizonMs,
+                            barsToMs(planningAnalysis, 2));
+                    planningHorizonMs = barsToMs(planningAnalysis, 32);
+                    Track runwayTrack = planningTrack;
+                    naturalRunwayRemainingMs = runwayTrack == null ? 0L
+                            : Math.max(0L, runwayTrack.durationMs - planningPositionMs
+                            - FALLBACK_BRIDGE_MS - 1_000L);
+                    published = true;
                 } else {
-                    continue;
+                    transitionMachine.fail();
+                    publishTransitionState();
                 }
             }
-            if (token != generation || !running) return;
-            if (epoch != planEpoch.get()) continue;
-            if (!player.offer(scene)) return;
-            if (escapeScene) {
-                player.seekTo(Math.max(player.currentPositionMs(), player.currentDurationMs() - 10_000L));
-            }
-            planningTrack = scene.anchorTrack;
-            planningAnalysis = scene.anchorAnalysis;
-            planningFragment = scene.anchorFragment;
-            planningPositionMs = scene.anchorPositionMs;
-            remember(planningTrack.id);
-            manualEscapePending = false;
-            forcedTargetId = -1L;
-            candidateOffset = 0;
-            transitionReadiness = 100;
-            sequence++;
+        }
+        if (!published) {
+            retryRenderLater(token);
+            return;
+        }
+        if (escapeScene) {
+            player.seekTo(Math.max(player.currentPositionMs(), player.currentDurationMs() - 10_000L));
+        }
+
+        if (enhancedEligible && !escapeScene) {
+            renderEnhancedCandidate(token, epoch, boundary, fallback,
+                    outgoingTrack, outgoingAnalysis, outgoingFragment, outgoingPositionMs, candidate);
         }
     }
+
+    private void fillNaturalRunway(int token, int epoch) {
+        int chunks = 0;
+        while (running && token == generation && epoch == planEpoch.get() && player != null
+                && player.bufferedHorizonMs() < highWatermarkMs()
+                && player.queuedScenes() < 4 && chunks < 3) {
+            Track track = planningTrack;
+            TrackAnalysis analysis = planningAnalysis;
+            TrackAnalysis.Fragment fragment = planningFragment;
+            long position = planningPositionMs;
+            if (track == null || analysis == null || fragment == null) return;
+            long available = track.durationMs - position - FALLBACK_BRIDGE_MS - 1_000L;
+            naturalRunwayRemainingMs = Math.max(0L, available);
+            if (available < 8_000L) {
+                fillPlannedContinuation(token, epoch, track, analysis, fragment,
+                        Math.max(1, 3 - chunks));
+                return;
+            }
+            long duration = Math.min(RUNWAY_CHUNK_MS, available);
+            RenderedScene continuation;
+            try {
+                continuation = SceneRenderer.renderContinuation(this, track, analysis, fragment,
+                        position, duration, "Natural runway while the next bridge is prepared")
+                        .forPlan(token, epoch);
+            } catch (Exception error) {
+                Log.w(TAG, "event=runway_render_failed anchor=" + track.id
+                        + " reason=" + error.getClass().getSimpleName(), error);
+                return;
+            }
+            synchronized (planControl) {
+                if (!isCurrentPlan(token, epoch)) return;
+                if (planningTrack != track || planningPositionMs != position) continue;
+                if (!player.offer(continuation)) return;
+                planningTrack = continuation.anchorTrack;
+                planningAnalysis = continuation.anchorAnalysis;
+                planningFragment = continuation.anchorFragment;
+                planningPositionMs = continuation.anchorPositionMs;
+                chunks++;
+            }
+        }
+        guaranteedRenderedHorizonMs = player == null ? 0L : player.bufferedHorizonMs();
+    }
+
+    private void fillPlannedContinuation(int token, int epoch, Track track,
+                                         TrackAnalysis analysis,
+                                         TrackAnalysis.Fragment anchorFragment,
+                                         int maximumChunks) {
+        ContinuationReservoir reservoir =
+                ContinuationReservoir.fromTrack(track.id, track.durationMs, analysis);
+        if (reservoir.fragments().isEmpty()) {
+            fallbackReason = "continuation reservoir empty";
+            return;
+        }
+        long currentSourceId;
+        long currentFragmentId;
+        long anchorSourceId;
+        List<Long> recentSources;
+        List<Long> recentMelodies;
+        synchronized (planControl) {
+            if (!isCurrentPlan(token, epoch)) return;
+            if (continuationTrackId != track.id) {
+                continuationTrackId = track.id;
+                continuationFragmentId = 0L;
+                recentContinuationSources.clear();
+                recentContinuationMelodies.clear();
+                usedContinuationSources.clear();
+                usedContinuationFragments.clear();
+                continuationSourceUses.clear();
+                continuationHistory.clear();
+                continuationAnchorSourceId = reservoir.sourceIdFor(anchorFragment);
+                if (continuationAnchorSourceId != 0L) {
+                    continuationSourceUses.put(continuationAnchorSourceId, 1);
+                }
+            }
+            currentSourceId = reservoir.sourceIdFor(anchorFragment);
+            currentFragmentId = continuationFragmentId;
+            anchorSourceId = continuationAnchorSourceId;
+            recentSources = new ArrayList<>(recentContinuationSources);
+            recentMelodies = new ArrayList<>(recentContinuationMelodies);
+        }
+        ContinuationReservoir.CurrentContext current =
+                new ContinuationReservoir.CurrentContext(currentFragmentId,
+                        currentSourceId, anchorSourceId,
+                        anchorFragment.energy);
+        NonRepeatingContinuationPlanner.Plan plan =
+                new NonRepeatingContinuationPlanner(reservoir).plan(current,
+                        new ContinuationReservoir.TargetTrackContext(analysis.energy),
+                        ContinuationReservoir.DeviceBudget.realtime(), 16,
+                        recentSources, recentMelodies);
+        fallbackReason = plan.complete ? "non-repeating deterministic continuation"
+                : "partial deterministic continuation";
+        if (plan.fragments.isEmpty()) return;
+
+        int rendered = 0;
+        for (ContinuationReservoir.Fragment requested : plan.fragments) {
+            if (rendered >= maximumChunks || player == null
+                    || player.queuedScenes() >= 4
+                    || player.bufferedHorizonMs() >= highWatermarkMs()) break;
+            ContinuationReservoir.Fragment planned;
+            synchronized (planControl) {
+                if (!isCurrentPlan(token, epoch)) return;
+                planned = safeVariation(reservoir, requested);
+            }
+            if (planned == null) continue;
+            RenderedScene continuation;
+            try {
+                continuation = SceneRenderer.renderContinuationVariant(this, track, analysis,
+                        planned.source, planned.cueMs, planned.durationMs,
+                        planned.variationMask,
+                        "Non-repeating continuation L0 · " + planned.kind)
+                        .forPlan(token, epoch);
+            } catch (Exception error) {
+                Log.w(TAG, "event=planned_continuation_failed fragment="
+                        + planned.fragmentId + " reason="
+                        + error.getClass().getSimpleName(), error);
+                continue;
+            }
+            synchronized (planControl) {
+                if (!isCurrentPlan(token, epoch)) return;
+                if (!player.offer(continuation)) return;
+                planningTrack = continuation.anchorTrack;
+                planningAnalysis = continuation.anchorAnalysis;
+                planningFragment = continuation.anchorFragment;
+                planningPositionMs = continuation.anchorPositionMs;
+                continuationFragmentId = planned.fragmentId;
+                rememberContinuation(planned);
+                rendered++;
+            }
+        }
+        guaranteedRenderedHorizonMs = player == null ? 0L : player.bufferedHorizonMs();
+    }
+
+    private ContinuationReservoir.Fragment safeVariation(
+            ContinuationReservoir reservoir,
+            ContinuationReservoir.Fragment requested) {
+        boolean sourceReused = usedContinuationSources.contains(requested.sourceFragmentId);
+        if (requested.sourceFragmentId == continuationAnchorSourceId
+                && continuationSourceUses.getOrDefault(requested.sourceFragmentId, 0) >= 2) {
+            return null;
+        }
+        if (!usedContinuationFragments.contains(requested.fragmentId)
+                && (!sourceReused
+                || requested.variationMask != ContinuationReservoir.VARIATION_NONE)) {
+            return requested;
+        }
+        for (ContinuationReservoir.Fragment candidate : reservoir.fragments()) {
+            if (candidate.sourceFragmentId == requested.sourceFragmentId
+                    && candidate.barCount == requested.barCount
+                    && candidate.variationMask != ContinuationReservoir.VARIATION_NONE
+                    && !usedContinuationFragments.contains(candidate.fragmentId)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private void rememberContinuation(ContinuationReservoir.Fragment fragment) {
+        recentContinuationSources.remove(fragment.sourceFragmentId);
+        recentContinuationSources.addLast(fragment.sourceFragmentId);
+        recentContinuationMelodies.remove(fragment.melodicFingerprint);
+        recentContinuationMelodies.addLast(fragment.melodicFingerprint);
+        usedContinuationSources.add(fragment.sourceFragmentId);
+        usedContinuationFragments.add(fragment.fragmentId);
+        continuationSourceUses.merge(fragment.sourceFragmentId, 1, Integer::sum);
+        continuationHistory.addLast(fragment);
+        while (continuationHistory.size() > 16) continuationHistory.removeFirst();
+        while (recentContinuationSources.size() > 2) recentContinuationSources.removeFirst();
+        while (recentContinuationMelodies.size() > 2) recentContinuationMelodies.removeFirst();
+        StringBuilder ids = new StringBuilder();
+        for (Long id : recentContinuationSources) {
+            if (ids.length() > 0) ids.append(',');
+            ids.append(Long.toUnsignedString(id));
+        }
+        recentFragmentIds = ids.toString();
+        RepetitionQualityEvaluator.Evaluation quality =
+                new RepetitionQualityEvaluator().evaluate(
+                        new ArrayList<>(continuationHistory));
+        repetitionScore = Math.max(quality.metrics.exactFragmentRepeatRate,
+                Math.max(quality.metrics.melodicRepeatRate,
+                        quality.metrics.fullArrangementRepeatRate));
+        noveltyScore = quality.metrics.noveltyPerBar;
+    }
+
+    private long lowWatermarkMs() {
+        return barsToMs(planningAnalysis, 8);
+    }
+
+    private long highWatermarkMs() {
+        return barsToMs(planningAnalysis, 16);
+    }
+
+    private static long barsToMs(TrackAnalysis analysis, int bars) {
+        float bpm = analysis == null || !Float.isFinite(analysis.bpm) ? 120f : analysis.bpm;
+        return Math.round(Math.max(1, bars) * 4.0 * 60_000.0 / Math.max(65f, bpm));
+    }
+
+    private static long nextBarBoundaryMs(Track track, TrackAnalysis.Fragment fragment,
+                                          long positionMs) {
+        long beat = Math.max(240L, fragment.beatPeriodMs);
+        long bar = beat * 4L;
+        long origin = Math.max(0L, fragment.cueMs);
+        long delta = Math.max(0L, positionMs - origin);
+        long boundary = origin + ((delta + bar - 1L) / bar) * bar;
+        long latest = Math.max(positionMs, track.durationMs - FALLBACK_BRIDGE_MS - 1_000L);
+        return boundary <= latest ? Math.max(positionMs, boundary) : positionMs;
+    }
+
+    private void renderEnhancedCandidate(int token, int epoch, long boundary,
+                                         RenderedScene fallback,
+                                         Track outgoingTrack, TrackAnalysis outgoingAnalysis,
+                                         TrackAnalysis.Fragment outgoingFragment, long outgoingPositionMs,
+                                         Candidate candidate) {
+        final int job;
+        FutureTask<Void> task;
+        synchronized (planControl) {
+            if (!isCurrentPlan(token, epoch)
+                    || transitionMachine.state()
+                    != TransitionStateMachine.State.WAITING_FOR_ACTIVATION_BOUNDARY) return;
+            cancelEnhancementLocked();
+            job = enhancementSerial.incrementAndGet();
+            task = new FutureTask<>(() -> {
+                runEnhancedCandidate(job, token, epoch, boundary, fallback, outgoingTrack,
+                        outgoingAnalysis, outgoingFragment, outgoingPositionMs, candidate);
+                return null;
+            });
+            enhancementTask = task;
+        }
+        enhancementWorker.execute(task);
+    }
+
+    private void runEnhancedCandidate(int job, int token, int epoch, long boundary,
+                                      RenderedScene fallback,
+                                      Track outgoingTrack, TrackAnalysis outgoingAnalysis,
+                                      TrackAnalysis.Fragment outgoingFragment, long outgoingPositionMs,
+                                      Candidate candidate) {
+        try {
+            long soloMs = 50_000L + patience * 360L;
+            RenderedScene enhanced = SceneRenderer.renderTransition(this,
+                    outgoingTrack, outgoingAnalysis, outgoingFragment, outgoingPositionMs,
+                    candidate.track, candidate.analysis, candidate.fragment, candidate.plan, soloMs)
+                    .asCandidate(boundary, 1, token, epoch);
+            synchronized (planControl) {
+                if (job != enhancementSerial.get() || !isCurrentPlan(token, epoch)
+                        || !enhanced.validCandidate
+                        || transitionMachine.state()
+                        != TransitionStateMachine.State.WAITING_FOR_ACTIVATION_BOUNDARY) return;
+                if (player.replaceQueued(fallback, enhanced)) {
+                    activeCandidateLevel = 1;
+                    planningTrack = enhanced.anchorTrack;
+                    planningAnalysis = enhanced.anchorAnalysis;
+                    planningFragment = enhanced.anchorFragment;
+                    planningPositionMs = enhanced.anchorPositionMs;
+                    guaranteedRenderedHorizonMs = player.bufferedHorizonMs();
+                }
+            }
+        } catch (Exception error) {
+            if (job == enhancementSerial.get()) {
+                Log.w(TAG, "event=enhanced_render_failed candidate=" + candidate.track.id
+                        + " reason=" + error.getClass().getSimpleName(), error);
+            }
+        } finally {
+            synchronized (planControl) {
+                if (job == enhancementSerial.get()) enhancementTask = null;
+            }
+        }
+    }
+
+    private boolean isCurrentPlan(int token, int epoch) {
+        return running && token == generation && epoch == planEpoch.get() && player != null;
+    }
+
+    private void failCurrentPlan(int token, int epoch) {
+        synchronized (planControl) {
+            if (!isCurrentPlan(token, epoch)) return;
+            transitionMachine.fail();
+            publishTransitionState();
+        }
+    }
+
+    private void cancelEnhancementLocked() {
+        enhancementSerial.incrementAndGet();
+        Future<?> task = enhancementTask;
+        enhancementTask = null;
+        if (task != null) task.cancel(true);
+    }
+
+    private void publishTransitionState() {
+        transitionState = transitionMachine.state().name();
+        transitionReadiness = transitionMachine.readinessPercent();
+        missedActivationBoundaries = transitionMachine.missedBoundaries();
+    }
+
 
     private void retryRenderLater(int token) {
         main.postDelayed(() -> scheduleRenderAhead(token), 1_200L);
@@ -374,9 +817,11 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
         java.util.Collections.shuffle(shuffled, random);
         int inspected = 0;
         for (Track track : shuffled) {
+            if (inspected >= 5) break;
             if (track.id == anchor.id || (recent.contains(track.id) && track.id != forcedTargetId)) continue;
-            if (++inspected > 34) break;
-            TrackAnalysis analysis = analyze(track);
+            TrackAnalysis analysis = preprocessedAnalysis(track);
+            if (analysis == null) continue;
+            inspected++;
             TrackAnalysis.Fragment fragment = analysis.chooseCompatibleFragment(anchorFragment,
                     anchorFragment.energy, chaos, track.durationMs, false);
             LayerPlan plan = ContinuityDirector.plan(anchorAnalysis, anchorFragment,
@@ -453,7 +898,8 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
         float bestScore = -Float.MAX_VALUE;
         for (Track track : library) {
             if (track.id == anchor.id) continue;
-            TrackAnalysis analysis = analyze(track);
+            TrackAnalysis analysis = preprocessedAnalysis(track);
+            if (analysis == null) analysis = TrackAnalysis.fallback(track);
             TrackAnalysis.Fragment fragment = analysis.chooseCompatibleFragment(anchorFragment,
                     anchorFragment.energy, chaos, track.durationMs, false);
             float vibe = ContinuityDirector.advancedVibeSimilarity(
@@ -500,17 +946,44 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
         return result;
     }
 
+    private TrackAnalysis preprocessedAnalysis(Track track) {
+        TrackAnalysis result = cache.get(track.id);
+        if (result != null) return result;
+        result = AnalysisCacheStore.get(this, track);
+        if (result != null) cache.put(track.id, result);
+        return result;
+    }
+
+    @Override public boolean canStartScene(RenderedScene scene) {
+        if (scene == null) return false;
+        synchronized (planControl) {
+            if (!scene.belongsToPlan(generation, planEpoch.get())) return false;
+            RenderedScene previous = activeScene;
+            if (previous != null && previous.anchorTrack.id != scene.anchorTrack.id) {
+                previousAnchorId = previous.anchorTrack.id;
+            }
+            if (scene.transitionScene) {
+                if (!scene.validCandidate || transitionMachine.state()
+                        != TransitionStateMachine.State.WAITING_FOR_ACTIVATION_BOUNDARY
+                        || !transitionMachine.activateAtBoundary(scene.activationBoundary)) return false;
+                activeCandidateLevel = scene.candidateLevel;
+                transitionInProgress = true;
+                transitioningScene = scene;
+                publishTransitionState();
+                cancelEnhancementLocked();
+            }
+            activeScene = scene;
+            return true;
+        }
+    }
+
     @Override public void onSceneStarted(RenderedScene scene) {
         main.post(() -> {
             if (!running) return;
-            RenderedScene previousScene = activeScene;
-            if (previousScene != null && previousScene.anchorTrack.id != scene.anchorTrack.id) {
-                previousAnchorId = previousScene.anchorTrack.id;
-            }
             sceneStartedAt = System.currentTimeMillis();
             sceneDurationMs = Math.max(1L, scene.audio.durationMs());
-            activeScene = scene;
-            transitionInProgress = false;
+            transitionInProgress = transitionMachine.state()
+                    == TransitionStateMachine.State.TRANSITIONING;
             playbackPositionMs = 0L;
             playbackDurationMs = sceneDurationMs;
             progress = 0;
@@ -530,14 +1003,25 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
     @Override public void onSceneFinished(RenderedScene scene) {
         main.post(() -> {
             if (!running) return;
-            if (replanAfterCurrent) {
-                replanAfterCurrent = false;
-                planningTrack = scene.anchorTrack;
-                planningAnalysis = scene.anchorAnalysis;
-                planningFragment = scene.anchorFragment;
-                planningPositionMs = scene.anchorPositionMs;
+            synchronized (planControl) {
+                boolean currentPlan = scene.belongsToPlan(generation, planEpoch.get());
+                if (scene == transitioningScene && currentPlan
+                        && transitionMachine.state() == TransitionStateMachine.State.TRANSITIONING) {
+                    transitionMachine.land();
+                    transitioningScene = null;
+                    publishTransitionState();
+                    transitionInProgress = false;
+                    activeCandidateLevel = -1;
+                }
+                if (replanAfterCurrent && currentPlan) {
+                    replanAfterCurrent = false;
+                    planningTrack = scene.anchorTrack;
+                    planningAnalysis = scene.anchorAnalysis;
+                    planningFragment = scene.anchorFragment;
+                    planningPositionMs = scene.anchorPositionMs;
+                }
+                if (activeScene == scene) activeScene = null;
             }
-            if (activeScene == scene) activeScene = null;
             if (sessionPlayer != null) sessionPlayer.refresh();
             scheduleRenderAhead(generation);
         });
@@ -570,27 +1054,37 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
 
     private void seekEngine(long positionMs) {
         if (!running || player == null) return;
-        player.seekTo(Math.max(0L, Math.min(playbackDurationMs, positionMs)));
+        long requested = Math.max(0L, Math.min(playbackDurationMs, positionMs));
+        player.seekTo(requested);
         invalidateFuturePlan("Seek применён без щелчка · старый план отменён");
     }
 
     private void invalidateFuturePlan(String reason) {
-        // First epoch cancels active work. Second epoch publishes the replacement anchor.
-        planEpoch.incrementAndGet();
-        player.clearQueued();
-        RenderedScene current = activeScene;
-        if (current != null) {
-            planningTrack = current.anchorTrack;
-            planningAnalysis = current.anchorAnalysis;
-            planningFragment = current.anchorFragment;
-            planningPositionMs = current.anchorPositionMs;
-        } else {
-            replanAfterCurrent = true;
+        synchronized (planControl) {
+            // First epoch cancels active work. Second epoch publishes the replacement anchor.
+            planEpoch.incrementAndGet();
+            cancelEnhancementLocked();
+            transitionMachine.cancel();
+            transitioningScene = null;
+            publishTransitionState();
+            transitionInProgress = false;
+            activeCandidateLevel = -1;
+            player.clearQueued();
+            RenderedScene current = activeScene;
+            if (current != null) {
+                planningTrack = current.anchorTrack;
+                planningAnalysis = current.anchorAnalysis;
+                planningFragment = current.anchorFragment;
+                // Seeking changes the read head inside already-rendered PCM. Future audio still
+                // starts after that scene reaches its fixed source endpoint.
+                planningPositionMs = current.anchorPositionMs;
+            } else {
+                replanAfterCurrent = true;
+            }
+            planEpoch.incrementAndGet();
+            queueSnapshot = "";
+            status = reason;
         }
-        planEpoch.incrementAndGet();
-        transitionReadiness = 0;
-        queueSnapshot = "";
-        status = reason;
         scheduleRenderAhead(generation);
     }
 
@@ -630,11 +1124,34 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
                     nativeOutputActive = player.nativeOutputActive();
                     playbackPositionMs = player.currentPositionMs();
                     playbackDurationMs = Math.max(1L, player.currentDurationMs());
+                    guaranteedRenderedHorizonMs = player.bufferedHorizonMs();
+                    committedHorizonMs = Math.min(guaranteedRenderedHorizonMs,
+                            barsToMs(planningAnalysis, 2));
+                    planningHorizonMs = barsToMs(planningAnalysis, 32);
+                    Track runwayTrack = planningTrack;
+                    naturalRunwayRemainingMs = runwayTrack == null ? 0L
+                            : Math.max(0L, runwayTrack.durationMs - planningPositionMs
+                            - FALLBACK_BRIDGE_MS - 1_000L);
+                    outputUnderruns = player.underruns();
+                    boolean low = guaranteedRenderedHorizonMs < lowWatermarkMs();
+                    if (low && !belowLowWatermark) {
+                        bufferLowWatermarkEvents++;
+                    }
+                    belowLowWatermark = low;
+                    if (low) {
+                        if (transitionMachine.state()
+                                == TransitionStateMachine.State.WAITING_FOR_ACTIVATION_BOUNDARY) {
+                            synchronized (planControl) {
+                                cancelEnhancementLocked();
+                            }
+                        }
+                        scheduleRenderAhead(token);
+                    }
                     progress = Math.max(0, Math.min(100,
                             Math.round(playbackPositionMs * 100f / playbackDurationMs)));
                     RenderedScene current = activeScene;
                     transitionInProgress = current != null && current.transitionScene
-                            && progress >= 55 && progress < 98;
+                            && transitionMachine.state() == TransitionStateMachine.State.TRANSITIONING;
                 }
                 if (sessionPlayer != null) sessionPlayer.refresh();
                 main.postDelayed(this, 450L);
@@ -652,6 +1169,13 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
 
     private void stopEngine() {
         generation++;
+        synchronized (planControl) {
+            cancelEnhancementLocked();
+            transitionMachine.cancel();
+            transitioningScene = null;
+            planEpoch.incrementAndGet();
+            publishTransitionState();
+        }
         running = false;
         paused = false;
         status = "Остановлено";
@@ -662,12 +1186,44 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
         nativeOutputActive = false;
         transitionInProgress = false;
         transitionReadiness = 0;
+        guaranteedRenderedHorizonMs = 0L;
+        committedHorizonMs = 0L;
+        planningHorizonMs = 0L;
+        naturalRunwayRemainingMs = 0L;
+        activeCandidateLevel = -1;
         queueSnapshot = "";
-        planEpoch.incrementAndGet();
         main.removeCallbacks(settleNext);
         stopAudioOnly();
         if (sessionPlayer != null) sessionPlayer.refresh();
         stopForeground(true);
+    }
+
+    public static String anonymizedDebugReport() {
+        return "schema=1\n"
+                + "transition_state=" + transitionState + '\n'
+                + "natural_runway_remaining_ms=" + naturalRunwayRemainingMs + '\n'
+                + "generation_eta=unavailable_no_neural_provider\n"
+                + "guaranteed_rendered_horizon_ms=" + guaranteedRenderedHorizonMs + '\n'
+                + "planning_horizon_ms=" + planningHorizonMs + '\n'
+                + "committed_horizon_ms=" + committedHorizonMs + '\n'
+                + "active_candidate_level=" + activeCandidateLevel + '\n'
+                + "recent_fragment_ids=" + recentFragmentIds + '\n'
+                + "repetition_score=" + repetitionScore + '\n'
+                + "novelty_score=" + noveltyScore + '\n'
+                + "buffer_low_watermark_events=" + bufferLowWatermarkEvents + '\n'
+                + "neural_upgrades_applied=" + neuralUpgradesApplied + '\n'
+                + "output_underruns=" + outputUnderruns + '\n'
+                + "fallback_reason=" + fallbackReason + '\n';
+    }
+
+    private void shareDebugReport() {
+        Intent share = new Intent(Intent.ACTION_SEND)
+                .setType("text/plain")
+                .putExtra(Intent.EXTRA_SUBJECT, "AutoRemix anonymized debug report")
+                .putExtra(Intent.EXTRA_TEXT, anonymizedDebugReport());
+        Intent chooser = Intent.createChooser(share, "Export debug report")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        startActivity(chooser);
     }
 
     private void stopAudioOnly() {
@@ -729,6 +1285,7 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
     @Override public void onDestroy() {
         stopEngine();
         worker.shutdownNow();
+        enhancementWorker.shutdownNow();
         if (mediaSession != null) {
             if (isSessionAdded(mediaSession)) removeSession(mediaSession);
             mediaSession.release();

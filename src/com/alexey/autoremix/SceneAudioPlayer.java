@@ -6,13 +6,13 @@ import android.media.AudioTrack;
 import android.os.Process;
 import android.util.Log;
 
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.LinkedBlockingDeque;
 
 /** Single master output. Oboe is preferred; AudioTrack remains the deterministic Tier-C fallback. */
 final class SceneAudioPlayer {
     private static final String TAG = "AutoRemixOutput";
     interface Listener {
+        boolean canStartScene(RenderedScene scene);
         void onSceneStarted(RenderedScene scene);
         void onSceneFinished(RenderedScene scene);
         void onPlaybackError(String error);
@@ -20,7 +20,9 @@ final class SceneAudioPlayer {
 
     private static final int OUTPUT_RATE = 48_000;
     private static final int BOUNDARY_MS = 14;
-    private final LinkedBlockingQueue<RenderedScene> queue = new LinkedBlockingQueue<>(3);
+    private static final int QUEUE_CAPACITY = 6;
+    private final LinkedBlockingDeque<RenderedScene> queue = new LinkedBlockingDeque<>(QUEUE_CAPACITY);
+    private final Object queueControl = new Object();
     private final Object outputControl = new Object();
     private final Listener listener;
     private volatile boolean running;
@@ -32,6 +34,7 @@ final class SceneAudioPlayer {
     private volatile long requestedSeekMs = -1L;
     private volatile long requestedSeekScene;
     private volatile long sceneSerial;
+    private volatile int queueUnderruns;
     private Thread thread;
     private AudioTrack track;
     private volatile NativeAudioEngine nativeEngine;
@@ -58,20 +61,66 @@ final class SceneAudioPlayer {
 
     boolean offer(RenderedScene scene) {
         if (!running || scene == null) return false;
-        try {
-            return queue.offer(scene, 300, TimeUnit.MILLISECONDS);
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            return false;
+        synchronized (queueControl) {
+            return queue.offerLast(scene);
+        }
+    }
+
+    boolean offerAll(RenderedScene... scenes) {
+        if (!running || scenes == null || scenes.length == 0) return false;
+        synchronized (queueControl) {
+            if (!running || queue.remainingCapacity() < scenes.length) return false;
+            for (RenderedScene scene : scenes) {
+                if (scene == null) return false;
+            }
+            for (RenderedScene scene : scenes) queue.offerLast(scene);
+            return true;
         }
     }
 
     int queuedScenes() {
-        return queue.size();
+        synchronized (queueControl) {
+            return queue.size();
+        }
+    }
+
+    long queuedDurationMs() {
+        synchronized (queueControl) {
+            long duration = 0L;
+            for (RenderedScene scene : queue) duration += scene.audio.durationMs();
+            return duration;
+        }
+    }
+
+    long bufferedHorizonMs() {
+        return Math.max(0L, currentDurationMs() - currentPositionMs()) + queuedDurationMs();
+    }
+
+    int underruns() {
+        int nativeUnderruns = 0;
+        synchronized (outputControl) {
+            NativeAudioEngine engine = nativeEngine;
+            if (engine != null) nativeUnderruns = engine.underruns();
+            else if (track != null) nativeUnderruns = track.getUnderrunCount();
+        }
+        return queueUnderruns + nativeUnderruns;
+    }
+
+    boolean replaceQueued(RenderedScene expected, RenderedScene replacement) {
+        if (!running || expected == null || replacement == null) return false;
+        synchronized (queueControl) {
+            if (queue.peekLast() != expected) return false;
+            queue.pollLast();
+            if (queue.offerLast(replacement)) return true;
+            queue.offerLast(expected);
+            return false;
+        }
     }
 
     void clearQueued() {
-        queue.clear();
+        synchronized (queueControl) {
+            queue.clear();
+        }
     }
 
     void seekTo(long positionMs) {
@@ -120,7 +169,7 @@ final class SceneAudioPlayer {
     void stop() {
         running = false;
         paused = false;
-        queue.clear();
+        clearQueued();
         synchronized (this) { notifyAll(); }
         if (thread != null) thread.interrupt();
         closeOutputs("stop");
@@ -147,17 +196,26 @@ final class SceneAudioPlayer {
                 openAudioTrackFallback();
             }
             float[] pendingTail = null;
-            float[] safetyLoop = null;
             RenderedScene previous = null;
             while (running) {
                 waitIfPaused();
-                RenderedScene scene = queue.poll(250, TimeUnit.MILLISECONDS);
+                RenderedScene scene;
+                synchronized (queueControl) {
+                    scene = queue.pollFirst();
+                }
                 if (scene == null) {
-                    if (pendingTail != null && safetyLoop != null) {
-                        pendingTail = writeSafetyLoopCycle(safetyLoop, pendingTail);
+                    if (pendingTail != null) {
+                        fadeOut(pendingTail);
+                        writeAll(pendingTail, 0, pendingTail.length);
+                        pendingTail = null;
+                        if (previous != null && listener != null) listener.onSceneFinished(previous);
+                        previous = null;
+                        queueUnderruns++;
                     }
+                    Thread.sleep(20L);
                     continue;
                 }
+                if (listener != null && !listener.canStartScene(scene)) continue;
                 if (listener != null) listener.onSceneStarted(scene);
                 long serial = ++sceneSerial;
                 float[] audio = scene.audio.stereo;
@@ -192,7 +250,6 @@ final class SceneAudioPlayer {
                 int start = overlapSamples;
                 int end = Math.max(start, audio.length - overlapSamples);
                 writeSceneBody(audio, start, end, serial);
-                safetyLoop = buildSafetyLoop(audio, start, end);
                 pendingTail = new float[audio.length - end];
                 System.arraycopy(audio, end, pendingTail, 0, pendingTail.length);
                 previous = scene;
@@ -350,41 +407,6 @@ final class SceneAudioPlayer {
         fadeIn(fadeIn);
         writeAll(fadeIn, 0, fadeIn.length);
         return rampSamples;
-    }
-
-    private float[] writeSafetyLoopCycle(float[] loop, float[] priorTail)
-            throws InterruptedException {
-        int overlap = Math.min(priorTail.length,
-                Math.min(loop.length / 4, OUTPUT_RATE * BOUNDARY_MS / 1000 * 2));
-        overlap -= overlap % 2;
-        if (overlap <= 0 || loop.length <= overlap * 2) {
-            writeAll(loop, 0, loop.length);
-            return priorTail;
-        }
-        float[] blend = new float[overlap];
-        for (int i = 0; i < overlap; i += 2) {
-            float p = overlap <= 2 ? 1f : i / (float) (overlap - 2);
-            float a = (float) Math.cos(p * Math.PI * .5);
-            float b = (float) Math.sin(p * Math.PI * .5);
-            blend[i] = priorTail[i] * a + loop[i] * b;
-            blend[i + 1] = priorTail[i + 1] * a + loop[i + 1] * b;
-        }
-        writeAll(blend, 0, blend.length);
-        int tailStart = loop.length - overlap;
-        writeAll(loop, overlap, tailStart - overlap);
-        float[] nextTail = new float[overlap];
-        System.arraycopy(loop, tailStart, nextTail, 0, overlap);
-        return nextTail;
-    }
-
-    private static float[] buildSafetyLoop(float[] audio, int start, int end) {
-        int available = Math.max(0, end - start);
-        int length = Math.min(available, OUTPUT_RATE * 2);
-        length -= length % 2;
-        if (length < OUTPUT_RATE) return null;
-        float[] loop = new float[length];
-        System.arraycopy(audio, end - length, loop, 0, length);
-        return loop;
     }
 
     private void reportControlError(String event, RuntimeException error) {

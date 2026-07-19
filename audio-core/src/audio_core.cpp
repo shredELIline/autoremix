@@ -220,10 +220,25 @@ fade_window(std::uint64_t frames, float center, float overlap) noexcept {
   return AutomationLane(std::move(points), 0.0F, curve);
 }
 
+[[nodiscard]] SourcePlaybackPolicy playback_policy_for(
+    const AudioView &view, std::uint32_t output_sample_rate,
+    std::uint64_t output_frames) noexcept {
+  if (!view.valid() || output_sample_rate == 0U) {
+    return SourcePlaybackPolicy::NoRepeat;
+  }
+  const auto required_source_frames =
+      static_cast<long double>(output_frames) * view.sample_rate /
+      output_sample_rate;
+  return required_source_frames > static_cast<long double>(view.frames)
+             ? SourcePlaybackPolicy::RepeatOnce
+             : SourcePlaybackPolicy::NoRepeat;
+}
+
 [[nodiscard]] BridgePlan make_plan(const std::vector<StemInput> &stems,
                                    const AnchorChoice &anchor,
                                    std::uint64_t frames,
-                                   const PlanShape &shape) {
+                                   const PlanShape &shape,
+                                   std::uint32_t output_sample_rate) {
   std::vector<StemTimeline> timelines;
   timelines.reserve(stems.size());
   auto hash = kFnvOffset;
@@ -280,25 +295,35 @@ fade_window(std::uint64_t frames, float center, float overlap) noexcept {
           SourceKind::SourceA, 0U, 0U, frames,
           fade_out_lane(frames, fade_start, fade_end, shape.curve),
           AutomationLane(0.0F)});
+      events.back().playback_policy =
+          playback_policy_for(stem.source_a, output_sample_rate, frames);
       events.push_back(
           TimelineEvent{SourceKind::SourceB, 0U, 0U, frames,
                         fade_in_lane(frames, fade_start, fade_end, shape.curve),
                         AutomationLane(0.0F)});
+      events.back().playback_policy =
+          playback_policy_for(stem.source_b, output_sample_rate, frames);
     } else if (has_a) {
       events.push_back(TimelineEvent{SourceKind::SourceA, 0U, 0U, frames,
                                      AutomationLane(1.0F),
                                      AutomationLane(0.0F)});
+      events.back().playback_policy =
+          playback_policy_for(stem.source_a, output_sample_rate, frames);
     } else if (has_b) {
       events.push_back(TimelineEvent{SourceKind::SourceB, 0U, 0U, frames,
                                      AutomationLane(1.0F),
                                      AutomationLane(0.0F)});
+      events.back().playback_policy =
+          playback_policy_for(stem.source_b, output_sample_rate, frames);
     } else if ((has_generated || shape.generated_textures) &&
                !is_vocal_role(stem.features.role)) {
       events.push_back(TimelineEvent{SourceKind::Generated, 0U, 0U, frames,
                                      AutomationLane(0.08F),
                                      AutomationLane(0.0F)});
       events.back().generation_mode = has_generated ? GenerationMode::Supplied
-                                                    : GenerationMode::Procedural;
+                                                     : GenerationMode::Procedural;
+      events.back().playback_policy =
+          playback_policy_for(stem.generated, output_sample_rate, frames);
     }
 
     if (shape.generated_textures && (has_a || has_b) &&
@@ -356,50 +381,68 @@ fade_window(std::uint64_t frames, float center, float overlap) noexcept {
   return a + (b - a) * fraction;
 }
 
-[[nodiscard]] float looped_interpolated_sample(const AudioView &view,
-                                               double source_frame,
-                                               std::uint32_t channel,
-                                               bool &nonfinite) noexcept {
+[[nodiscard]] float bounded_interpolated_sample(
+    const AudioView &view, double source_frame, std::uint64_t source_start,
+    std::uint32_t channel, SourcePlaybackPolicy policy,
+    bool &nonfinite) noexcept {
   if (!view.valid() || !std::isfinite(source_frame)) {
     nonfinite = nonfinite || !std::isfinite(source_frame);
     return 0.0F;
   }
-  const auto position = std::max(0.0, source_frame);
+  if (source_start >= view.frames ||
+      source_frame < static_cast<double>(source_start)) {
+    return 0.0F;
+  }
+  const auto span_frames = view.frames - source_start;
+  const auto span = static_cast<double>(span_frames);
+  const auto relative = source_frame - static_cast<double>(source_start);
   const auto crossfade_frames =
-      std::min<std::uint64_t>(64U, view.frames / 4U);
+      std::min<std::uint64_t>(64U, span_frames / 4U);
+
+  const auto fade_last_pass = [&](double position) noexcept {
+    auto sample = raw_interpolated_sample(
+        view, static_cast<double>(source_start) + position, channel, nonfinite);
+    if (crossfade_frames == 0U ||
+        position < span - static_cast<double>(crossfade_frames)) {
+      return sample;
+    }
+    const auto fade_position = finite_clamp(
+        static_cast<float>((position -
+                            (span - static_cast<double>(crossfade_frames))) /
+                           static_cast<double>(crossfade_frames)),
+        0.0F, 1.0F);
+    const auto gain = std::cos(0.5 * kPi * fade_position);
+    return static_cast<float>(sample * gain);
+  };
+
+  if (policy == SourcePlaybackPolicy::NoRepeat) {
+    return relative < span ? fade_last_pass(relative) : 0.0F;
+  }
+  if (relative >= 2.0 * span) {
+    return 0.0F;
+  }
   if (crossfade_frames == 0U) {
-    const auto wrapped = std::fmod(position, static_cast<double>(view.frames));
-    return raw_interpolated_sample(view, wrapped, channel, nonfinite);
+    const auto position = relative < span ? relative : relative - span;
+    return raw_interpolated_sample(
+        view, static_cast<double>(source_start) + position, channel, nonfinite);
   }
 
-  const auto frame_count = static_cast<double>(view.frames);
   const auto crossfade = static_cast<double>(crossfade_frames);
-  double tail_position = 0.0;
-  double head_position = 0.0;
-  double mix = -1.0;
-  if (position < frame_count) {
-    if (position < frame_count - crossfade) {
-      return raw_interpolated_sample(view, position, channel, nonfinite);
-    }
-    tail_position = position;
-    head_position = position - (frame_count - crossfade);
-    mix = head_position / crossfade;
-  } else {
-    const auto period = frame_count - crossfade;
-    auto phase = std::fmod(position - frame_count, period);
-    if (phase < 0.0) {
-      phase += period;
-    }
-    const auto straight_frames = frame_count - 2.0 * crossfade;
-    if (phase < straight_frames) {
-      return raw_interpolated_sample(view, crossfade + phase, channel,
-                                     nonfinite);
-    }
-    const auto local = phase - straight_frames;
-    tail_position = frame_count - crossfade + local;
-    head_position = local;
-    mix = local / crossfade;
+  if (relative < span - crossfade) {
+    return raw_interpolated_sample(
+        view, static_cast<double>(source_start) + relative, channel, nonfinite);
   }
+  if (relative >= span + crossfade) {
+    return fade_last_pass(relative - span);
+  }
+
+  const auto mix_position =
+      (relative - (span - crossfade)) / (2.0 * crossfade);
+  const auto source_offset = mix_position * crossfade;
+  const auto tail_position = static_cast<double>(source_start) + span -
+                             crossfade + source_offset;
+  const auto head_position = static_cast<double>(source_start) + source_offset;
+  auto mix = mix_position;
   mix = mix * mix * (3.0 - 2.0 * mix);
   const auto tail =
       raw_interpolated_sample(view, tail_position, channel, nonfinite);
@@ -462,27 +505,33 @@ struct EventRenderState final {
 };
 
 [[nodiscard]] StereoSample sample_view_stereo(const AudioView &view,
-                                              double source_position,
-                                              bool &nonfinite) noexcept {
-  const auto left =
-      looped_interpolated_sample(view, source_position, 0U, nonfinite);
+                                               double source_position,
+                                               std::uint64_t source_start,
+                                               SourcePlaybackPolicy policy,
+                                               bool &nonfinite) noexcept {
+  const auto left = bounded_interpolated_sample(
+      view, source_position, source_start, 0U, policy, nonfinite);
   const auto right = view.channels == 1U
                          ? left
-                         : looped_interpolated_sample(view, source_position, 1U,
-                                                       nonfinite);
+                         : bounded_interpolated_sample(
+                               view, source_position, source_start, 1U, policy,
+                               nonfinite);
   return {left, right};
 }
 
 [[nodiscard]] StereoSample generated_stereo(const StemInput &stem,
-                                            double source_position,
-                                            std::uint32_t sample_rate,
-                                            GenerationMode mode,
-                                            bool &nonfinite) noexcept {
+                                             double source_position,
+                                             std::uint64_t source_start,
+                                             std::uint32_t sample_rate,
+                                             GenerationMode mode,
+                                             SourcePlaybackPolicy policy,
+                                             bool &nonfinite) noexcept {
   if (is_vocal_role(stem.features.role)) {
     return {};
   }
   if (mode != GenerationMode::Procedural && stem.generated.valid()) {
-    return sample_view_stereo(stem.generated, source_position, nonfinite);
+    return sample_view_stereo(stem.generated, source_position, source_start,
+                              policy, nonfinite);
   }
   const AudioView *derived = nullptr;
   if (stem.source_a.valid()) {
@@ -491,8 +540,19 @@ struct EventRenderState final {
     derived = &stem.source_b;
   }
   if (derived != nullptr) {
-    const auto granular_position = source_position * 0.997;
-    return sample_view_stereo(*derived, granular_position, nonfinite);
+    const auto granular_position =
+        static_cast<double>(source_start) +
+        (source_position - static_cast<double>(source_start)) * 0.997;
+    const auto available = source_start < derived->frames
+                               ? derived->frames - source_start
+                               : 0U;
+    const auto relative = granular_position - source_start;
+    const auto passes = policy == SourcePlaybackPolicy::RepeatOnce ? 2.0 : 1.0;
+    if (available > 0U && relative >= 0.0 &&
+        relative < passes * static_cast<double>(available)) {
+      return sample_view_stereo(*derived, granular_position, source_start,
+                                policy, nonfinite);
+    }
   }
   const auto bounded = static_cast<std::uint64_t>(std::max(
       0.0, std::min(source_position,
@@ -509,10 +569,13 @@ struct EventRenderState final {
   StereoSample sample;
   const auto *view = source_view(stem, event.source);
   if (event.source == SourceKind::Generated) {
-    sample = generated_stereo(stem, state.source_position, output_sample_rate,
-                              event.generation_mode, nonfinite);
+    sample = generated_stereo(stem, state.source_position, event.source_start,
+                              output_sample_rate, event.generation_mode,
+                              event.playback_policy, nonfinite);
   } else if (view != nullptr && view->valid()) {
-    sample = sample_view_stereo(*view, state.source_position, nonfinite);
+    sample = sample_view_stereo(*view, state.source_position,
+                                event.source_start, event.playback_policy,
+                                nonfinite);
   }
 
   auto morph = finite_clamp(event.morph.value_at(local), 0.0F, 1.0F);
@@ -521,8 +584,8 @@ struct EventRenderState final {
   }
   if (morph > 0.0F && event.source != SourceKind::Generated) {
     const auto generated = generated_stereo(
-        stem, state.source_position, output_sample_rate, GenerationMode::Morph,
-        nonfinite);
+        stem, state.source_position, event.source_start, output_sample_rate,
+        GenerationMode::Morph, event.playback_policy, nonfinite);
     sample.left = sample.left * (1.0F - morph) + generated.left * morph;
     sample.right = sample.right * (1.0F - morph) + generated.right * morph;
   }
@@ -593,6 +656,12 @@ diagnostics_equivalent(const QualityDiagnostics &diagnostics) noexcept {
     return true;
   }
   return false;
+}
+
+[[nodiscard]] bool
+valid_playback_policy(SourcePlaybackPolicy policy) noexcept {
+  return policy == SourcePlaybackPolicy::NoRepeat ||
+         policy == SourcePlaybackPolicy::RepeatOnce;
 }
 
 void validate_bridge_request(const BridgeRequest &request) {
@@ -741,8 +810,9 @@ StemTimeline::StemTimeline(std::uint32_t stem_id, StemRole role,
   for (const auto &event : events_) {
     if (event.duration == 0U ||
         event.timeline_start >
-            std::numeric_limits<std::uint64_t>::max() - event.duration) {
-      throw std::invalid_argument("timeline event duration is invalid");
+            std::numeric_limits<std::uint64_t>::max() - event.duration ||
+        !valid_playback_policy(event.playback_policy)) {
+      throw std::invalid_argument("timeline event is invalid");
     }
     if (is_vocal_role(role_) && event.source == SourceKind::Generated) {
       throw std::invalid_argument("generated vocal audio is prohibited");
@@ -969,7 +1039,8 @@ SearchResult BridgePlanner::search(const std::vector<StemInput> &stems,
       return result;
     }
     result.candidates.push_back(
-        make_plan(stems, *anchor, frames, beam[index].shape));
+        make_plan(stems, *anchor, frames, beam[index].shape,
+                  context.sample_rate));
   }
   return result;
 }
@@ -977,7 +1048,6 @@ SearchResult BridgePlanner::search(const std::vector<StemInput> &stems,
 BridgePlan BridgePlanner::safe_crossfade(const std::vector<StemInput> &stems,
                                          std::uint32_t sample_rate,
                                          std::uint64_t frames) const {
-  (void)sample_rate;
   const auto anchor = AnchorSelector::select(effective_features(stems));
   if (!anchor || frames == 0U) {
     return BridgePlan{};
@@ -989,13 +1059,12 @@ BridgePlan BridgePlanner::safe_crossfade(const std::vector<StemInput> &stems,
   shape.generated_textures = false;
   shape.score = -1.0;
   shape.key = 0x53414645ULL;
-  return make_plan(stems, *anchor, frames, shape);
+  return make_plan(stems, *anchor, frames, shape, sample_rate);
 }
 
 BridgePlan BridgePlanner::anchor_only(const std::vector<StemInput> &stems,
                                       std::uint32_t sample_rate,
                                       std::uint64_t frames) const {
-  (void)sample_rate;
   const auto anchor = AnchorSelector::select(effective_features(stems));
   if (!anchor || frames == 0U) {
     return BridgePlan{};
@@ -1014,19 +1083,27 @@ BridgePlan BridgePlanner::anchor_only(const std::vector<StemInput> &stems,
         SourceKind::SourceA, 0U, 0U, frames,
         fade_out_lane(frames, start, end, AutomationCurve::SmoothStep),
         AutomationLane(0.0F)});
+    events.back().playback_policy =
+        playback_policy_for(input->source_a, sample_rate, frames);
     events.push_back(TimelineEvent{
         SourceKind::SourceB, 0U, 0U, frames,
         fade_in_lane(frames, start, end, AutomationCurve::SmoothStep),
         AutomationLane(0.0F)});
+    events.back().playback_policy =
+        playback_policy_for(input->source_b, sample_rate, frames);
   } else if (has_a || has_b) {
     events.push_back(TimelineEvent{
         has_a ? SourceKind::SourceA : SourceKind::SourceB, 0U, 0U, frames,
         AutomationLane(1.0F), AutomationLane(0.0F)});
+    events.back().playback_policy = playback_policy_for(
+        has_a ? input->source_a : input->source_b, sample_rate, frames);
   } else if (has_generated && !is_vocal_role(input->features.role)) {
     events.push_back(TimelineEvent{SourceKind::Generated, 0U, 0U, frames,
                                    AutomationLane(1.0F),
                                    AutomationLane(0.0F)});
     events.back().generation_mode = GenerationMode::Supplied;
+    events.back().playback_policy =
+        playback_policy_for(input->generated, sample_rate, frames);
   } else {
     return BridgePlan{};
   }

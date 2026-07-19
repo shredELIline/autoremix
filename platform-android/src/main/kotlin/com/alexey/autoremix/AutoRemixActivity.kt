@@ -158,6 +158,7 @@ internal object AnalysisWork {
         val constraints = Constraints.Builder()
             .setRequiresBatteryNotLow(true)
             .setRequiresCharging(true)
+            .setRequiresDeviceIdle(true)
             .setRequiredNetworkType(NetworkType.NOT_REQUIRED)
             .build()
         val request = PeriodicWorkRequestBuilder<LibraryAnalysisWorker>(12, TimeUnit.HOURS)
@@ -191,6 +192,19 @@ internal data class EngineUiState(
     val cacheBytes: Long,
     val quality: String,
     val transitionInProgress: Boolean,
+    val transitionState: String,
+    val guaranteedHorizonMs: Long,
+    val candidateLevel: Int,
+    val lowWatermarkEvents: Int,
+    val outputUnderruns: Int,
+    val naturalRunwayMs: Long,
+    val committedHorizonMs: Long,
+    val planningHorizonMs: Long,
+    val repetitionScore: Float,
+    val noveltyScore: Float,
+    val recentFragmentIds: String,
+    val neuralUpgrades: Int,
+    val fallbackReason: String,
 ) {
     companion object {
         fun read(): EngineUiState = EngineUiState(
@@ -213,6 +227,19 @@ internal data class EngineUiState(
             cacheBytes = RemixEngineService.cacheBytes,
             quality = if (RemixEngineService.nativeOutputActive) "Tier C · native Oboe" else "Tier C · AudioTrack fallback",
             transitionInProgress = RemixEngineService.transitionInProgress,
+            transitionState = RemixEngineService.transitionState,
+            guaranteedHorizonMs = RemixEngineService.guaranteedRenderedHorizonMs,
+            candidateLevel = RemixEngineService.activeCandidateLevel,
+            lowWatermarkEvents = RemixEngineService.bufferLowWatermarkEvents,
+            outputUnderruns = RemixEngineService.outputUnderruns,
+            naturalRunwayMs = RemixEngineService.naturalRunwayRemainingMs,
+            committedHorizonMs = RemixEngineService.committedHorizonMs,
+            planningHorizonMs = RemixEngineService.planningHorizonMs,
+            repetitionScore = RemixEngineService.repetitionScore,
+            noveltyScore = RemixEngineService.noveltyScore,
+            recentFragmentIds = RemixEngineService.recentFragmentIds,
+            neuralUpgrades = RemixEngineService.neuralUpgradesApplied,
+            fallbackReason = RemixEngineService.fallbackReason,
         )
 
         fun demo() = EngineUiState(
@@ -235,6 +262,19 @@ internal data class EngineUiState(
             cacheBytes = 173L * 1024L * 1024L,
             quality = "Tier C · native Oboe",
             transitionInProgress = false,
+            transitionState = "ARMED",
+            guaranteedHorizonMs = 36_000,
+            candidateLevel = 0,
+            lowWatermarkEvents = 0,
+            outputUnderruns = 0,
+            naturalRunwayMs = 28_000,
+            committedHorizonMs = 4_000,
+            planningHorizonMs = 64_000,
+            repetitionScore = 0f,
+            noveltyScore = 1f,
+            recentFragmentIds = "7,8",
+            neuralUpgrades = 0,
+            fallbackReason = "instant Level 0",
         )
     }
 }
@@ -279,7 +319,11 @@ internal fun AutoRemixScreen(
                     item { LibraryOverview(snapshot, onStart) }
                     item { NowPlaying(snapshot, onAction) }
                     item { Transport(snapshot, onAction, onStart) }
-                    item { TransitionCard(snapshot) }
+                    item {
+                        TransitionCard(snapshot) {
+                            onAction(RemixEngineService.ACTION_EXPORT_DEBUG, 0L)
+                        }
+                    }
                     item { QueueCard(snapshot.queue) }
                     item { AnalysisCacheCard(snapshot) }
                     item { SettingsCard(snapshot, onAction) }
@@ -297,7 +341,11 @@ internal fun AutoRemixScreen(
                     item { NowPlaying(snapshot, onAction) }
                     item { Transport(snapshot, onAction, onStart) }
                 }
-                ScreenshotFixture.Transition -> item { TransitionCard(snapshot) }
+                ScreenshotFixture.Transition -> item {
+                    TransitionCard(snapshot) {
+                        onAction(RemixEngineService.ACTION_EXPORT_DEBUG, 0L)
+                    }
+                }
                 ScreenshotFixture.Queue -> item { QueueCard(snapshot.queue) }
                 ScreenshotFixture.AnalysisCache -> item { AnalysisCacheCard(snapshot) }
                 ScreenshotFixture.Settings -> item { SettingsCard(snapshot, onAction) }
@@ -461,7 +509,7 @@ private fun CircleControl(icon: androidx.compose.ui.graphics.vector.ImageVector,
 }
 
 @Composable
-private fun TransitionCard(state: EngineUiState) {
+private fun TransitionCard(state: EngineUiState, onExport: () -> Unit) {
     val phaseLabel = when {
         state.transitionInProgress -> "TRANSITION IN PROGRESS"
         state.readiness >= 100 -> "TRANSITION READY"
@@ -495,6 +543,32 @@ private fun TransitionCard(state: EngineUiState) {
         }
         Spacer(Modifier.height(9.dp))
         Text(state.status, color = MaterialTheme.colorScheme.primary, fontSize = 11.sp, maxLines = 2)
+        Text(
+            "${state.transitionState} | buffer ${time(state.guaranteedHorizonMs)} | L${state.candidateLevel.coerceAtLeast(0)} | low ${state.lowWatermarkEvents} | underrun ${state.outputUnderruns}",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 10.sp,
+            maxLines = 1,
+        )
+        Text(
+            "runway ${time(state.naturalRunwayMs)} | committed ${time(state.committedHorizonMs)} | planning ${time(state.planningHorizonMs)}",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 10.sp,
+        )
+        Text(
+            "repeat ${"%.2f".format(state.repetitionScore)} | novelty ${"%.2f".format(state.noveltyScore)} | neural ${state.neuralUpgrades} | ids ${state.recentFragmentIds.ifBlank { "none" }}",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 10.sp,
+            maxLines = 1,
+        )
+        Text(
+            "fallback: ${state.fallbackReason}",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 10.sp,
+            maxLines = 1,
+        )
+        Button(onClick = onExport, modifier = Modifier.padding(top = 8.dp)) {
+            Text("Export anonymized debug report")
+        }
     }
 }
 

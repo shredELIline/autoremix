@@ -56,6 +56,11 @@ enum class GenerationMode : std::uint8_t {
   Morph = 3,
 };
 
+enum class SourcePlaybackPolicy : std::uint8_t {
+  NoRepeat = 0,
+  RepeatOnce = 1,
+};
+
 enum class QualityTier : std::uint8_t {
   Economy = 0,
   Balanced = 1,
@@ -134,6 +139,7 @@ struct TimelineEvent final {
   AutomationLane delay_send{0.0F};
   AutomationLane morph{0.0F};
   GenerationMode generation_mode{GenerationMode::None};
+  SourcePlaybackPolicy playback_policy{SourcePlaybackPolicy::NoRepeat};
 };
 
 class StemTimeline final {

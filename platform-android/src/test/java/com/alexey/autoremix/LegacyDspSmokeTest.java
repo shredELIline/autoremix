@@ -14,6 +14,10 @@ public final class LegacyDspSmokeTest {
         ContinuityDirectorSmokeTest.main(NO_ARGS);
     }
 
+    @Test public void continuationPlanner() {
+        ContinuationPlannerSmokeTest.main(NO_ARGS);
+    }
+
     @Test public void directorFuzz() {
         DirectorFuzzSmokeTest.main(NO_ARGS);
     }
@@ -28,6 +32,10 @@ public final class LegacyDspSmokeTest {
 
     @Test public void stemReconstruction() {
         StemReconstructionSmokeTest.main(NO_ARGS);
+    }
+
+    @Test public void transitionStateMachine() {
+        TransitionStateMachineSmokeTest.main(NO_ARGS);
     }
 
     @Test public void wsola() {
