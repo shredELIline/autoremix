@@ -35,6 +35,13 @@
       "tag": "v2.3.0",
       "android": "debug-preview-apk",
       "ios": "source-only"
+    },
+    {
+      "version_name": "2.4.0",
+      "version_code": 13,
+      "tag": "v2.4.0",
+      "android": "debug-preview-apk",
+      "ios": "source-only"
     }
   ]
 }

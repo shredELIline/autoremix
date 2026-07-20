@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.4.0 — Real musical playback timeline
+
+- Replaced fixed preview-sized playback windows with metadata-backed full-track
+  timelines and planner-selected entry, transition, exit, and landing positions.
+- Added explicit playback and transition phases so the normal track timeline is
+  replaced only while a stem transition is active and returns after full landing.
+- Added full-duration progress with entry and next-transition markers, calculated
+  transition spans, and non-zero target positions after landing.
+- Synchronized transition progress and stem-operation presentation to the master
+  audio sample clock instead of an independent UI timer.
+- Added variable musical transition scheduling from track structure, phrase/grid
+  confidence, stem and vocal activity, energy, and available playback runway.
+- Added timing, state, integration, and UI coverage for varied schedules and real
+  original-track positions. Android delivery remains a CI-built debug preview.
+- Added MediaStore album artwork to the player and both transition sides, with
+  A/B fallback, adjacent Like/Dislike, and centered Previous/Play/Next controls.
+- Chunked spectral analysis and compact prepared stems keep variable 6–16-bar
+  transitions inside the accepted on-device memory policy without duration crop.
+
 ## 2.3.0 — Continuous stem scene engine
 
 - Replaced separately scheduled Android transition PCM with one structured stem
