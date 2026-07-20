@@ -8,8 +8,8 @@ final class PreparedStemScene {
     private static final int FILTER_ALPHA_STEPS = 1_024;
 
     final ContinuousSceneTransitionPlan plan;
-    private final StemBundle sourceA;
-    private final StemBundle sourceB;
+    private final QuantizedStemBundle sourceA;
+    private final QuantizedStemBundle sourceB;
     private final PcmAudio targetProgramme;
     private final int outputSampleRate;
     private final int transitionOutputFrames;
@@ -27,13 +27,22 @@ final class PreparedStemScene {
                       StemBundle sourceA, StemBundle sourceB,
                       PcmAudio targetProgramme, int outputSampleRate,
                       int transitionProcessFrames, int totalProcessFrames) {
+        this(plan, QuantizedStemBundle.from(sourceA), QuantizedStemBundle.from(sourceB),
+                targetProgramme, outputSampleRate, transitionProcessFrames,
+                totalProcessFrames);
+    }
+
+    PreparedStemScene(ContinuousSceneTransitionPlan plan,
+                      QuantizedStemBundle sourceA, QuantizedStemBundle sourceB,
+                      PcmAudio targetProgramme, int outputSampleRate,
+                      int transitionProcessFrames, int totalProcessFrames) {
         if (plan == null || sourceA == null || sourceB == null || targetProgramme == null
                 || sourceA.sampleRate != sourceB.sampleRate
                 || sourceA.sampleRate != targetProgramme.sampleRate
                 || outputSampleRate <= 0 || transitionProcessFrames <= 0
                 || totalProcessFrames < transitionProcessFrames
-                || sourceA.frames() < transitionProcessFrames
-                || sourceB.frames() < transitionProcessFrames
+                || sourceA.frames < transitionProcessFrames
+                || sourceB.frames < transitionProcessFrames
                 || targetProgramme.frames() < totalProcessFrames) {
             throw new IllegalArgumentException("invalid prepared stem scene");
         }
@@ -139,16 +148,15 @@ final class PreparedStemScene {
                         * laneFrame / sourceA.sampleRate) * .035f;
                 sourceLeft = sourceRight = texture;
             } else {
-                StemBundle stems = timeline.source
+                QuantizedStemBundle stems = timeline.source
                         == ContinuousSceneTransitionPlan.Source.A ? sourceA : sourceB;
                 if (timeline.semanticRole
                         == ContinuousSceneTransitionPlan.SemanticRole.FULL_MIX) {
-                    sourceLeft = fullMixSample(stems, laneFrame, 0);
-                    sourceRight = fullMixSample(stems, laneFrame, 1);
+                    sourceLeft = stems.fullMixSample(laneFrame, 0);
+                    sourceRight = stems.fullMixSample(laneFrame, 1);
                 } else {
-                    float[] samples = roleSamples(stems, timeline.semanticRole);
-                    sourceLeft = interpolated(samples, laneFrame, 0);
-                    sourceRight = interpolated(samples, laneFrame, 1);
+                    sourceLeft = stems.sample(timeline.semanticRole, laneFrame, 0);
+                    sourceRight = stems.sample(timeline.semanticRole, laneFrame, 1);
                 }
             }
             float width = Math.max(0f, timeline.widthEnvelope.valueAt(planSample));
@@ -231,29 +239,6 @@ final class PreparedStemScene {
         double processFrame = outputFrame * targetProgramme.sampleRate
                 / (double) outputSampleRate;
         return interpolated(targetProgramme.stereo, processFrame, channel);
-    }
-
-    private static float fullMixSample(StemBundle stems, double frame, int channel) {
-        return interpolated(stems.lead, frame, channel)
-                + interpolated(stems.drums, frame, channel)
-                + interpolated(stems.bass, frame, channel)
-                + interpolated(stems.backing, frame, channel);
-    }
-
-    private static float[] roleSamples(
-            StemBundle stems, ContinuousSceneTransitionPlan.SemanticRole role) {
-        switch (role) {
-            case LEAD_VOCAL:
-            case VOCAL_TEXTURE:
-                return stems.lead;
-            case DRUMS:
-            case PERCUSSION:
-                return stems.drums;
-            case BASS:
-                return stems.bass;
-            default:
-                return stems.backing;
-        }
     }
 
     private static float interpolated(float[] stereo, double frame, int channel) {

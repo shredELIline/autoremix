@@ -6,6 +6,8 @@ import android.media.AudioTrack;
 import android.os.Process;
 import android.util.Log;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.LinkedBlockingDeque;
 
 /** Single master output. Oboe is preferred; AudioTrack remains the deterministic Tier-C fallback. */
@@ -39,6 +41,13 @@ final class SceneAudioPlayer {
     private volatile long sceneFramesWritten;
     private volatile long sceneFramesTotal = 1L;
     private volatile long sceneClockOriginFrames;
+    private volatile long sceneMasterOriginFrames;
+    private volatile boolean sceneBoundaryOpen;
+    private volatile RenderedScene clockScene;
+    private volatile RenderedScene previousClockScene;
+    private RenderedScene dequeuedPendingScene;
+    private volatile long previousSceneFramesTotal = 1L;
+    private volatile long previousSceneClockOriginFrames;
     private volatile long outputClockOffsetFrames;
     private volatile long requestedSeekMs = -1L;
     private volatile long requestedSeekScene;
@@ -103,16 +112,47 @@ final class SceneAudioPlayer {
     }
 
     long bufferedHorizonMs() {
-        return Math.max(0L, currentDurationMs() - currentPositionMs()) + queuedDurationMs();
+        long currentEnd = sceneClockOriginFrames + sceneFramesTotal;
+        long remainingFrames = Math.max(0L, currentEnd - outputClockFrames());
+        return Math.round(remainingFrames * 1_000.0 / OUTPUT_RATE) + queuedDurationMs();
     }
 
-    long producerHorizonFrames() {
-        long frames = sceneSerial == 0L ? 0L
-                : Math.max(0L, sceneFramesTotal - sceneFramesWritten);
+    long transitionActivationSample(RenderedScene optionalRunway) {
+        long origin;
+        List<Long> predecessorFrames = new ArrayList<>();
         synchronized (queueControl) {
-            for (RenderedScene scene : queue) frames += scene.frames();
+            if (dequeuedPendingScene != null) {
+                origin = masterGraph.sampleClock();
+                predecessorFrames.add((long) dequeuedPendingScene.frames());
+            } else if (sceneSerial == 0L || clockScene == null || !sceneBoundaryOpen) {
+                origin = masterGraph.sampleClock();
+            } else {
+                origin = sceneMasterOriginFrames;
+                predecessorFrames.add(sceneFramesTotal);
+            }
+            for (RenderedScene scene : queue) predecessorFrames.add((long) scene.frames());
+            if (optionalRunway != null) {
+                predecessorFrames.add((long) optionalRunway.frames());
+            }
         }
-        return frames;
+        long[] frames = new long[predecessorFrames.size()];
+        for (int i = 0; i < frames.length; i++) frames[i] = predecessorFrames.get(i);
+        return Math.max(masterGraph.sampleClock(),
+                projectedActivationSample(origin, BOUNDARY_FRAMES, frames));
+    }
+
+    static long projectedActivationSample(long origin, long boundaryFrames,
+                                          long... predecessorFrames) {
+        long activation = Math.max(0L, origin);
+        long overlapLimit = Math.max(0L, boundaryFrames);
+        for (int i = 0; i < predecessorFrames.length; i++) {
+            long current = Math.max(0L, predecessorFrames[i]);
+            long next = i + 1 < predecessorFrames.length
+                    ? Math.max(0L, predecessorFrames[i + 1]) : overlapLimit;
+            long overlap = Math.min(overlapLimit, Math.min(current, next));
+            activation += current - overlap;
+        }
+        return activation;
     }
 
     int underruns() {
@@ -160,8 +200,36 @@ final class SceneAudioPlayer {
     }
 
     long currentPositionMs() {
-        long frames = Math.max(0L, outputClockFrames() - sceneClockOriginFrames);
-        return Math.round(Math.min(sceneFramesTotal, frames) * 1000.0 / OUTPUT_RATE);
+        return Math.round(currentFrame() * 1000.0 / OUTPUT_RATE);
+    }
+
+    long currentFrame() {
+        return audibleSceneFrame(audibleScene());
+    }
+
+    RenderedScene audibleScene() {
+        if (outputClockFrames() < sceneClockOriginFrames && previousClockScene != null) {
+            return previousClockScene;
+        }
+        return clockScene;
+    }
+
+    long audibleSceneFrame() {
+        return audibleSceneFrame(audibleScene());
+    }
+
+    long audibleSceneFrame(RenderedScene scene) {
+        long clock = outputClockFrames();
+        if (scene != null && scene == previousClockScene) {
+            return Math.min(previousSceneFramesTotal,
+                    Math.max(0L, clock - previousSceneClockOriginFrames));
+        }
+        if (scene != clockScene) return 0L;
+        return Math.min(sceneFramesTotal, Math.max(0L, clock - sceneClockOriginFrames));
+    }
+
+    long audibleMasterSample() {
+        return Math.max(0L, outputClockFrames() - masterGraph.latencyFrames());
     }
 
     long currentDurationMs() {
@@ -233,11 +301,15 @@ final class SceneAudioPlayer {
                 RenderedScene scene;
                 synchronized (queueControl) {
                     scene = queue.pollFirst();
+                    dequeuedPendingScene = scene;
                 }
                 if (scene == null) {
                     if (pendingTailSamples > 0) {
                         fadeOut(boundaryTail, pendingTailSamples);
                         writeAll(boundaryTail, 0, pendingTailSamples);
+                        synchronized (queueControl) {
+                            sceneBoundaryOpen = false;
+                        }
                         pendingTailSamples = 0;
                         if (previous != null && listener != null) listener.onSceneFinished(previous);
                         previous = null;
@@ -246,18 +318,31 @@ final class SceneAudioPlayer {
                     Thread.sleep(20L);
                     continue;
                 }
-                if (listener != null && !listener.canStartScene(scene)) continue;
+                if (listener != null && !listener.canStartScene(scene)) {
+                    synchronized (queueControl) {
+                        if (dequeuedPendingScene == scene) dequeuedPendingScene = null;
+                    }
+                    continue;
+                }
                 if (scene.transitionScene) {
                     activationUnderrunBaseline = underruns();
                     masterGraph.markTransitionActivation(scene.transitionId());
                 }
+                long serial;
+                synchronized (queueControl) {
+                    previousClockScene = clockScene;
+                    previousSceneClockOriginFrames = sceneClockOriginFrames;
+                    previousSceneFramesTotal = sceneFramesTotal;
+                    clockScene = scene;
+                    serial = ++sceneSerial;
+                    sceneFramesWritten = 0L;
+                    sceneFramesTotal = Math.max(1L, scene.frames());
+                    sceneMasterOriginFrames = masterGraph.sampleClock();
+                    sceneClockOriginFrames = sceneMasterOriginFrames + masterGraph.latencyFrames();
+                    sceneBoundaryOpen = true;
+                    dequeuedPendingScene = null;
+                }
                 if (listener != null) listener.onSceneStarted(scene);
-                long serial = ++sceneSerial;
-                sceneFramesWritten = 0L;
-                sceneFramesTotal = Math.max(1L, scene.frames());
-                NativeAudioEngine engine = nativeEngine;
-                sceneClockOriginFrames = outputClockFrames()
-                        + (engine == null ? 0L : engine.queuedFrames());
                 int overlapSamples = Math.min(scene.frames() * 2,
                         BOUNDARY_FRAMES * 2);
                 overlapSamples -= overlapSamples % 2;
@@ -292,6 +377,9 @@ final class SceneAudioPlayer {
             if (pendingTailSamples > 0) {
                 fadeOut(boundaryTail, pendingTailSamples);
                 writeAll(boundaryTail, 0, pendingTailSamples);
+                synchronized (queueControl) {
+                    sceneBoundaryOpen = false;
+                }
             }
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
@@ -366,7 +454,11 @@ final class SceneAudioPlayer {
                     }
                     masterGraph.restartProcessingNodes();
                     scene.resetRenderPosition(target);
-                    sceneClockOriginFrames = outputClockFrames() - target;
+                    synchronized (queueControl) {
+                        sceneClockOriginFrames = outputClockFrames()
+                                + masterGraph.latencyFrames() - target;
+                        sceneMasterOriginFrames = masterGraph.sampleClock() - target;
+                    }
                     int consumed = writeSeekRamp(scene, target);
                     position = Math.min(end, target + consumed);
                     sceneFramesWritten = position;

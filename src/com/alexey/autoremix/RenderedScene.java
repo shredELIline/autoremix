@@ -1,5 +1,9 @@
 package com.alexey.autoremix;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
 /** One prepared programme segment and the anchor state at its end. */
 final class RenderedScene {
     final PcmAudio audio;
@@ -17,22 +21,26 @@ final class RenderedScene {
     final int planEpoch;
     final ContinuousSceneTransitionPlan continuousPlan;
     final PreparedStemScene preparedStemScene;
+    final SceneTimelineMapping timelineMapping;
+    final List<AudioTransformationEvent> transformationEvents;
 
     RenderedScene(PcmAudio audio, Track anchorTrack, TrackAnalysis anchorAnalysis,
                   TrackAnalysis.Fragment anchorFragment, long anchorPositionMs,
                   String title, String description, boolean transitionScene) {
         this(audio, anchorTrack, anchorAnalysis, anchorFragment, anchorPositionMs,
                 title, description, transitionScene, -1L, -1, false, -1, -1,
-                null, null);
+                null, null, null, List.of());
     }
 
     private RenderedScene(PcmAudio audio, Track anchorTrack, TrackAnalysis anchorAnalysis,
                           TrackAnalysis.Fragment anchorFragment, long anchorPositionMs,
                           String title, String description, boolean transitionScene,
                           long activationBoundary, int candidateLevel, boolean validCandidate,
-                          int planGeneration, int planEpoch,
-                          ContinuousSceneTransitionPlan continuousPlan,
-                          PreparedStemScene preparedStemScene) {
+                           int planGeneration, int planEpoch,
+                           ContinuousSceneTransitionPlan continuousPlan,
+                           PreparedStemScene preparedStemScene,
+                           SceneTimelineMapping timelineMapping,
+                           List<AudioTransformationEvent> transformationEvents) {
         this.audio = audio;
         this.anchorTrack = anchorTrack;
         this.anchorAnalysis = anchorAnalysis;
@@ -48,6 +56,11 @@ final class RenderedScene {
         this.planEpoch = planEpoch;
         this.continuousPlan = continuousPlan;
         this.preparedStemScene = preparedStemScene;
+        this.timelineMapping = timelineMapping == null
+                ? defaultMapping(audio, anchorTrack, anchorPositionMs, preparedStemScene)
+                : timelineMapping;
+        this.transformationEvents = Collections.unmodifiableList(new ArrayList<>(
+                transformationEvents == null ? List.of() : transformationEvents));
     }
 
     RenderedScene asCandidate(long boundary, int level, int generation, int epoch) {
@@ -66,14 +79,14 @@ final class RenderedScene {
         return new RenderedScene(audio, anchorTrack, anchorAnalysis, anchorFragment,
                 anchorPositionMs, title, description, transitionScene,
                 boundary, level, valid, generation, epoch, continuousPlan,
-                preparedStemScene);
+                preparedStemScene, timelineMapping, transformationEvents);
     }
 
     RenderedScene forPlan(int generation, int epoch) {
         return new RenderedScene(audio, anchorTrack, anchorAnalysis, anchorFragment,
                 anchorPositionMs, title, description, transitionScene,
                 activationBoundary, candidateLevel, validCandidate, generation, epoch,
-                continuousPlan, preparedStemScene);
+                continuousPlan, preparedStemScene, timelineMapping, transformationEvents);
     }
 
     RenderedScene withContinuousPlan(ContinuousSceneTransitionPlan plan) {
@@ -83,7 +96,7 @@ final class RenderedScene {
         return new RenderedScene(audio, anchorTrack, anchorAnalysis, anchorFragment,
                 anchorPositionMs, title, description, true, activationBoundary,
                 candidateLevel, validCandidate, planGeneration, planEpoch, plan,
-                preparedStemScene);
+                preparedStemScene, timelineMapping, transformationEvents);
     }
 
     RenderedScene withPreparedStemScene(PreparedStemScene prepared,
@@ -94,7 +107,23 @@ final class RenderedScene {
         return new RenderedScene(new PcmAudio(prepared.sampleRate(), new float[0]),
                 anchorTrack, anchorAnalysis, anchorFragment, anchorPositionMs,
                 title, description, true, activationBoundary, candidateLevel,
-                validCandidate, planGeneration, planEpoch, plan, prepared);
+                validCandidate, planGeneration, planEpoch, plan, prepared,
+                timelineMapping, transformationEvents);
+    }
+
+    RenderedScene withTimelineMapping(SceneTimelineMapping mapping) {
+        if (mapping == null) throw new IllegalArgumentException("mapping");
+        return new RenderedScene(audio, anchorTrack, anchorAnalysis, anchorFragment,
+                anchorPositionMs, title, description, transitionScene, activationBoundary,
+                candidateLevel, validCandidate, planGeneration, planEpoch, continuousPlan,
+                preparedStemScene, mapping, transformationEvents);
+    }
+
+    RenderedScene withTransformationEvents(List<AudioTransformationEvent> events) {
+        return new RenderedScene(audio, anchorTrack, anchorAnalysis, anchorFragment,
+                anchorPositionMs, title, description, transitionScene, activationBoundary,
+                candidateLevel, validCandidate, planGeneration, planEpoch, continuousPlan,
+                preparedStemScene, timelineMapping, events);
     }
 
     int sampleRate() {
@@ -136,5 +165,17 @@ final class RenderedScene {
 
     boolean belongsToPlan(int generation, int epoch) {
         return planGeneration == generation && planEpoch == epoch;
+    }
+
+    private static SceneTimelineMapping defaultMapping(
+            PcmAudio audio, Track anchorTrack, long anchorPositionMs,
+            PreparedStemScene preparedStemScene) {
+        int sampleRate = preparedStemScene == null ? audio.sampleRate
+                : preparedStemScene.sampleRate();
+        int frames = preparedStemScene == null ? audio.frames() : preparedStemScene.frames();
+        long durationMs = Math.round(frames * 1_000.0 / Math.max(1, sampleRate));
+        long startMs = Math.max(0L, anchorPositionMs - durationMs);
+        return SceneTimelineMapping.normal(anchorTrack.id, anchorTrack.durationMs,
+                startMs, sampleRate, frames);
     }
 }

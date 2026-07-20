@@ -14,7 +14,6 @@ final class ContinuousScenePlanner {
     static final float MAX_ACTIVATION_UNDERRUN_RISK = .05f;
     static final float MAX_SAMPLE_DISCONTINUITY = .20f;
     static final float MIN_QUALITY_SCORE = .55f;
-    private static final int TRANSITION_BARS = 16;
 
     enum VetoReason {
         STEM_SEPARATOR_UNAVAILABLE,
@@ -229,7 +228,6 @@ final class ContinuousScenePlanner {
                 this.targetTrackId = targetTrackId;
                 this.activationSample = activationSample;
                 this.samplesPerBar = samplesPerBar;
-                transitionSamples = samplesPerBar * TRANSITION_BARS;
                 sourceStartSample = activationSample;
                 guaranteedRenderedSamples = samplesPerBar * 8L;
             }

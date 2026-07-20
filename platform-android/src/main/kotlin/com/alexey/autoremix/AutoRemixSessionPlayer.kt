@@ -1,7 +1,7 @@
 package com.alexey.autoremix
 
+import android.net.Uri
 import android.os.Looper
-import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -17,36 +17,45 @@ class AutoRemixSessionPlayer(private val controls: Controls) : SimpleBasePlayer(
         fun dispatch(action: String, value: Long)
     }
 
-    private val commands = Player.Commands.Builder()
+    private fun commands(isSeekable: Boolean) = Player.Commands.Builder()
         .add(Player.COMMAND_PLAY_PAUSE)
-        .add(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
         .add(Player.COMMAND_SEEK_TO_NEXT)
         .add(Player.COMMAND_SEEK_TO_PREVIOUS)
         .add(Player.COMMAND_GET_CURRENT_MEDIA_ITEM)
         .add(Player.COMMAND_GET_TIMELINE)
         .add(Player.COMMAND_GET_METADATA)
         .add(Player.COMMAND_RELEASE)
+        .apply {
+            if (isSeekable) add(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
+        }
         .build()
 
     override fun getState(): State {
-        val durationMs = RemixEngineService.playbackDurationMs.coerceAtLeast(1L)
+        val playback = RemixEngineService.playbackUiSnapshot
+        val timeline = playback.trackTimeline
+        val durationMs = timeline.durationMs.coerceAtLeast(1L)
+        val isSeekable = false
+        val artworkUri = RemixEngineService.currentArtworkUri
+            .takeIf(String::isNotBlank)
+            ?.let(Uri::parse)
         val metadata = MediaMetadata.Builder()
             .setTitle(RemixEngineService.currentTrack)
             .setSubtitle(RemixEngineService.currentMeta)
             .setArtist("AutoRemix · on-device")
+            .setArtworkUri(artworkUri)
             .build()
         val item = MediaItem.Builder()
-            .setMediaId("autoremix-current")
+            .setMediaId("autoremix-${timeline.trackId}")
             .setMediaMetadata(metadata)
             .build()
-        val data = MediaItemData.Builder("autoremix-current")
+        val data = MediaItemData.Builder("autoremix-${timeline.trackId}")
             .setMediaItem(item)
             .setMediaMetadata(metadata)
-            .setIsSeekable(true)
+            .setIsSeekable(isSeekable)
             .setDurationUs(durationMs * 1_000L)
             .build()
         return State.Builder()
-            .setAvailableCommands(commands)
+            .setAvailableCommands(commands(isSeekable))
             .setPlaylist(listOf(data))
             .setCurrentMediaItemIndex(0)
             .setPlaybackState(if (RemixEngineService.running) Player.STATE_READY else Player.STATE_IDLE)
@@ -54,7 +63,7 @@ class AutoRemixSessionPlayer(private val controls: Controls) : SimpleBasePlayer(
                 RemixEngineService.running && !RemixEngineService.paused,
                 Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST,
             )
-            .setContentPositionMs(RemixEngineService.playbackPositionMs.coerceIn(0L, durationMs))
+            .setContentPositionMs(timeline.currentPositionMs.coerceIn(0L, durationMs))
             .build()
     }
 
@@ -78,10 +87,7 @@ class AutoRemixSessionPlayer(private val controls: Controls) : SimpleBasePlayer(
         when (seekCommand) {
             Player.COMMAND_SEEK_TO_NEXT -> controls.dispatch(RemixEngineService.ACTION_SKIP, 0L)
             Player.COMMAND_SEEK_TO_PREVIOUS -> controls.dispatch(RemixEngineService.ACTION_BACK, 0L)
-            else -> controls.dispatch(
-                RemixEngineService.ACTION_SEEK,
-                if (positionMs == C.TIME_UNSET) 0L else positionMs,
-            )
+            else -> Unit
         }
         return Futures.immediateVoidFuture()
     }

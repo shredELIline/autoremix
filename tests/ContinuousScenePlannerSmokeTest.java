@@ -245,6 +245,7 @@ public final class ContinuousScenePlannerSmokeTest {
     private static ContinuousScenePlanner.PlanningRequest.Builder eligibleRequest(long id) {
         return ContinuousScenePlanner.PlanningRequest.builder(id, 101L, 202L,
                         2_448_000L, BAR)
+                .transitionSamples(BAR * 16L)
                 .sourceStartSample(2_448_000L)
                 .targetLandingSample(864_000L)
                 .stem(ContinuousSceneTransitionPlan.SemanticRole.LEAD_VOCAL,

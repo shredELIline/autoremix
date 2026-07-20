@@ -392,6 +392,126 @@ final class ContinuousSceneTransitionPlan {
         return selectedStrategy.stemBased;
     }
 
+    long targetCoreOwnershipSample() {
+        Set<Long> candidates = ownershipSamples();
+        for (long sample : candidates) {
+            if (sample >= activationSample && sample < landingSample
+                    && targetCoreRolesAudible(sample)) return sample;
+        }
+        return Math.max(activationSample, landingSample - 1L);
+    }
+
+    boolean fullTrackLandingAt(long sample) {
+        if (sample < activationSample || sample >= landingSample
+                || !targetCoreRolesAudible(sample)) return false;
+        for (StemTimeline timeline : stemTimelines) {
+            if (!isCoreRole(timeline.semanticRole)) continue;
+            float gain = timeline.gainAt(sample);
+            if (timeline.source == Source.A && gain > SILENCE_GAIN) return false;
+            if (timeline.source == Source.GENERATED && gain > SILENCE_GAIN) return false;
+        }
+        return true;
+    }
+
+    long lastAudibleSample(Source source) {
+        long last = activationSample;
+        for (StemTimeline timeline : stemTimelines) {
+            if (timeline.source != source) continue;
+            for (long sample : timeline.gainEnvelope.criticalSamples(AUDIBLE_GAIN)) {
+                for (long candidate : new long[]{sample - 1L, sample, sample + 1L}) {
+                    if (candidate >= activationSample && candidate < landingSample
+                            && timeline.gainAt(candidate) > AUDIBLE_GAIN) {
+                        last = Math.max(last, candidate);
+                    }
+                }
+            }
+        }
+        return Math.min(landingSample - 1L, last);
+    }
+
+    List<AudioTransformationEvent> transformationEvents(float renderedTempoRatio) {
+        List<AudioTransformationEvent> events = new ArrayList<>();
+        long eventId = transitionId * 1_000L;
+        for (StemTimeline timeline : stemTimelines) {
+            AudioTransformationEvent.StemType stem = stemType(timeline.semanticRole);
+            if (timeline.source == Source.GENERATED) {
+                events.add(event(eventId++, stem,
+                        timeline.semanticRole == SemanticRole.ATMOSPHERE
+                                ? AudioTransformationEvent.TransformationType.ATMOSPHERE_GENERATION
+                                : AudioTransformationEvent.TransformationType.GENERATED_FILL,
+                        firstChangingSample(timeline.gainEnvelope),
+                        lastChangingSample(timeline.gainEnvelope), 0f, 1f,
+                        "Связываем музыкальные фразы"));
+            } else if (!timeline.gainEnvelope.constant) {
+                AudioTransformationEvent.TransformationType type = timeline.source == Source.B
+                        ? handoffType(timeline.semanticRole)
+                        : AudioTransformationEvent.TransformationType.STEM_FADE;
+                events.add(event(eventId++, stem, type,
+                        firstChangingSample(timeline.gainEnvelope),
+                        lastChangingSample(timeline.gainEnvelope),
+                        timeline.gainEnvelope.valueAt(firstChangingSample(timeline.gainEnvelope)),
+                        timeline.gainEnvelope.valueAt(lastChangingSample(timeline.gainEnvelope)),
+                        handoffLabel(timeline.semanticRole, timeline.source)));
+            }
+            if (!timeline.filterEnvelope.constant) {
+                events.add(event(eventId++, stem,
+                        AudioTransformationEvent.TransformationType.FILTER_SWEEP,
+                        firstChangingSample(timeline.filterEnvelope),
+                        lastChangingSample(timeline.filterEnvelope),
+                        timeline.filterEnvelope.valueAt(firstChangingSample(timeline.filterEnvelope)),
+                        timeline.filterEnvelope.valueAt(lastChangingSample(timeline.filterEnvelope)),
+                        "Открываем музыкальный слой"));
+            }
+            if (!timeline.harmonicMorphEnvelope.constant) {
+                events.add(event(eventId++, stem,
+                        AudioTransformationEvent.TransformationType.HARMONIC_BRIDGE,
+                        firstChangingSample(timeline.harmonicMorphEnvelope),
+                        lastChangingSample(timeline.harmonicMorphEnvelope), 0f, 1f,
+                        "Сводим гармонию"));
+            }
+            if (!timeline.timbreMorphEnvelope.constant) {
+                events.add(event(eventId++, stem,
+                        timeline.semanticRole == SemanticRole.GUITAR
+                                ? AudioTransformationEvent.TransformationType.GUITAR_MORPH
+                                : AudioTransformationEvent.TransformationType.EQ_MORPH,
+                        firstChangingSample(timeline.timbreMorphEnvelope),
+                        lastChangingSample(timeline.timbreMorphEnvelope), 0f, 1f,
+                        timeline.semanticRole == SemanticRole.GUITAR
+                                ? "Передаём гитарную линию" : "Сближаем тембры"));
+            }
+            if (!timeline.reverbEnvelope.constant) {
+                events.add(event(eventId++, stem,
+                        AudioTransformationEvent.TransformationType.REVERB_TAIL,
+                        firstChangingSample(timeline.reverbEnvelope),
+                        lastChangingSample(timeline.reverbEnvelope),
+                        timeline.reverbEnvelope.valueAt(firstChangingSample(timeline.reverbEnvelope)),
+                        timeline.reverbEnvelope.valueAt(lastChangingSample(timeline.reverbEnvelope)),
+                        "Оставляем музыкальный хвост"));
+            }
+        }
+        if (Float.isFinite(renderedTempoRatio) && Math.abs(renderedTempoRatio - 1f) > .005f) {
+            events.add(event(eventId++, AudioTransformationEvent.StemType.FULL_MIX,
+                    AudioTransformationEvent.TransformationType.TIME_STRETCH,
+                    activationSample, landingSample, renderedTempoRatio, 1f,
+                    "Синхронизируем ритм"));
+        }
+        for (AnchorSelection anchor : selectedAnchorSet) {
+            events.add(event(eventId++, stemType(anchor.semanticRole),
+                    anchor.source == Source.A
+                            ? AudioTransformationEvent.TransformationType.ANCHOR_PRESERVED
+                            : AudioTransformationEvent.TransformationType.ANCHOR_RELEASED,
+                    anchor.startSample, anchor.endSample, 0f, 1f,
+                    anchor.source == Source.A ? "Сохраняем музыкальную линию"
+                            : "Передаём музыкальную линию"));
+        }
+        long landingStart = Math.max(activationSample,
+                landingSample - Math.max(1L, (landingSample - activationSample) / 8L));
+        events.add(event(eventId, AudioTransformationEvent.StemType.FULL_MIX,
+                AudioTransformationEvent.TransformationType.LANDING,
+                landingStart, landingSample, 0f, 1f, "Завершаем переход"));
+        return Collections.unmodifiableList(events);
+    }
+
     String vocalOwnerTimeline(int cells) {
         int width = Math.max(4, cells);
         StringBuilder result = new StringBuilder(width);
@@ -440,6 +560,114 @@ final class ContinuousSceneTransitionPlan {
         long duration = landingSample - activationSample;
         return activationSample + Math.min(duration - 1L,
                 Math.max(0L, (2L * cell + 1L) * duration / (2L * cells)));
+    }
+
+    private Set<Long> ownershipSamples() {
+        Set<Long> samples = new java.util.TreeSet<>();
+        samples.add(activationSample);
+        samples.add(landingSample - 1L);
+        for (StemTimeline timeline : stemTimelines) {
+            samples.addAll(timeline.gainEnvelope.criticalSamples(AUDIBLE_GAIN, SILENCE_GAIN));
+        }
+        Set<Long> expanded = new java.util.TreeSet<>();
+        for (long sample : samples) {
+            for (long candidate : new long[]{sample - 1L, sample, sample + 1L}) {
+                if (candidate >= activationSample && candidate < landingSample) {
+                    expanded.add(candidate);
+                }
+            }
+        }
+        return expanded;
+    }
+
+    private boolean targetCoreRolesAudible(long sample) {
+        if (targetGain(SemanticRole.FULL_MIX, sample) > AUDIBLE_GAIN) return true;
+        boolean rhythm = Math.max(targetGain(SemanticRole.DRUMS, sample),
+                targetGain(SemanticRole.PERCUSSION, sample)) > AUDIBLE_GAIN;
+        boolean bass = targetGain(SemanticRole.BASS, sample) > AUDIBLE_GAIN;
+        float backingGain = 0f;
+        for (SemanticRole role : new SemanticRole[]{SemanticRole.HARMONY,
+                SemanticRole.GUITAR, SemanticRole.MELODY,
+                SemanticRole.BACKING_VOCAL}) {
+            backingGain = Math.max(backingGain, targetGain(role, sample));
+        }
+        boolean targetLeadDeclared = stemTimelines.stream().anyMatch(timeline ->
+                timeline.source == Source.B && timeline.semanticRole == SemanticRole.LEAD_VOCAL);
+        boolean leadReady = !targetLeadDeclared
+                || targetGain(SemanticRole.LEAD_VOCAL, sample) > AUDIBLE_GAIN;
+        return rhythm && bass && backingGain > AUDIBLE_GAIN && leadReady;
+    }
+
+    private float targetGain(SemanticRole role, long sample) {
+        float best = 0f;
+        for (StemTimeline timeline : stemTimelines) {
+            if (timeline.source == Source.B && timeline.semanticRole == role) {
+                best = Math.max(best, timeline.gainAt(sample));
+            }
+        }
+        return best;
+    }
+
+    private static boolean isCoreRole(SemanticRole role) {
+        return role != SemanticRole.ATMOSPHERE && role != SemanticRole.EFFECTS
+                && role != SemanticRole.VOCAL_TEXTURE;
+    }
+
+    private AudioTransformationEvent event(
+            long eventId, AudioTransformationEvent.StemType stem,
+            AudioTransformationEvent.TransformationType type,
+            long start, long end, float from, float to, String label) {
+        return new AudioTransformationEvent(eventId, transitionId, stem, type,
+                sourceTrackId, targetTrackId, start, Math.max(start + 1L, end),
+                0f, Math.min(1f, Math.abs(to - from)), from, to, label);
+    }
+
+    private static long firstChangingSample(Envelope envelope) {
+        for (int index = 1; index < envelope.points.size(); index++) {
+            if (envelope.points.get(index - 1).value != envelope.points.get(index).value) {
+                return envelope.points.get(index - 1).sample;
+            }
+        }
+        return envelope.points.get(0).sample;
+    }
+
+    private static long lastChangingSample(Envelope envelope) {
+        for (int index = envelope.points.size() - 1; index > 0; index--) {
+            if (envelope.points.get(index - 1).value != envelope.points.get(index).value) {
+                return envelope.points.get(index).sample;
+            }
+        }
+        return envelope.points.get(envelope.points.size() - 1).sample;
+    }
+
+    private static AudioTransformationEvent.TransformationType handoffType(SemanticRole role) {
+        if (role == SemanticRole.BASS) {
+            return AudioTransformationEvent.TransformationType.BASS_HANDOFF;
+        }
+        if (role == SemanticRole.GUITAR) {
+            return AudioTransformationEvent.TransformationType.GUITAR_MORPH;
+        }
+        return AudioTransformationEvent.TransformationType.STEM_HANDOFF;
+    }
+
+    private static String handoffLabel(SemanticRole role, Source source) {
+        if (source == Source.A) return "Освобождаем музыкальный слой";
+        switch (role) {
+            case LEAD_VOCAL: return "Входит вокал следующего трека";
+            case DRUMS:
+            case PERCUSSION: return "Передаём ритм";
+            case BASS: return "Передаём бас";
+            case GUITAR: return "Передаём гитарную линию";
+            default: return "Передаём музыкальный слой";
+        }
+    }
+
+    private static AudioTransformationEvent.StemType stemType(SemanticRole role) {
+        try {
+            return AudioTransformationEvent.StemType.valueOf(role.name());
+        } catch (IllegalArgumentException ignored) {
+            return AudioTransformationEvent.StemType.UNKNOWN;
+        }
     }
 
     static float vocalConflictScore(List<StemTimeline> timelines,

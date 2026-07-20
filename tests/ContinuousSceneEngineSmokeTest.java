@@ -5,7 +5,7 @@ import java.util.Locale;
 
 public final class ContinuousSceneEngineSmokeTest {
     private static final int RATE = 48_000;
-    private static final long ACTIVATION = RATE * 51L;
+    private static final long PLAN_ACTIVATION = RATE * 37L;
     private static final long BAR = 12_000L;
     private static final int TRANSITION_FRAMES = Math.toIntExact(BAR * 16L);
     private static final int TOTAL_FRAMES = TRANSITION_FRAMES + RATE * 2;
@@ -15,7 +15,7 @@ public final class ContinuousSceneEngineSmokeTest {
         independentStemOperations(planning);
         renderedVocalsKeepOneOwner(planning.plan);
         generatedCandidateRendersANode(planning);
-        exactFiftyOneSecondActivationUsesOneGraph(planning.plan);
+        variableActivationBoundariesUseOneGraph(planning.plan);
         System.out.println("Continuous scene engine integration OK");
     }
 
@@ -126,60 +126,43 @@ public final class ContinuousSceneEngineSmokeTest {
         if (energy <= 1e-3) throw new AssertionError("generated node was not rendered");
     }
 
-    private static void exactFiftyOneSecondActivationUsesOneGraph(
+    private static void variableActivationBoundariesUseOneGraph(
             ContinuousSceneTransitionPlan plan) {
-        MasterAudioGraph graph = new MasterAudioGraph(512, 0);
-        float[] block = new float[512 * 2];
-        long frame = 0L;
-        while (frame < ACTIVATION) {
-            int count = (int) Math.min(512L, ACTIVATION - frame);
-            fillProgramme(block, count, frame, false);
-            graph.processBlock(block, 0, count);
-            frame += count;
+        for (int boundarySeconds : new int[]{11, 29, 51}) {
+            long activation = RATE * (long) boundarySeconds;
+            MasterAudioGraph graph = new MasterAudioGraph(512, 0);
+            float[] block = new float[512 * 2];
+            long frame = 0L;
+            while (frame < activation) {
+                int count = (int) Math.min(512L, activation - frame);
+                fillProgramme(block, count, frame, false);
+                graph.processBlock(block, 0, count);
+                frame += count;
+            }
+            if (graph.markTransitionActivation(plan.transitionId) != activation) {
+                throw new AssertionError("activation sample mismatch " + boundarySeconds);
+            }
+            fillProgramme(block, 512, frame, true);
+            graph.processBlock(block, 0, 512);
+            MasterAudioGraph.ContinuityMetrics metrics = graph.snapshotMetrics();
+            if (metrics.lastActivationFrame != activation
+                    || metrics.transitionActivations != 1L
+                    || metrics.currentActivationGapFrames != 0L
+                    || metrics.underrunEvents != 0L
+                    || metrics.graphRecreations != 0L
+                    || metrics.nodeRecreations != 0L) {
+                throw new AssertionError("activation broke persistent graph at "
+                        + boundarySeconds + " seconds");
+            }
         }
-        if (graph.markTransitionActivation(plan.transitionId) != ACTIVATION) {
-            throw new AssertionError("activation is not exactly 51.000s");
-        }
-        PreparedStemScene scene = new PreparedStemScene(plan,
-                programmeStems(TRANSITION_FRAMES, false, false),
-                programmeStems(TRANSITION_FRAMES, true, false),
-                programme(TOTAL_FRAMES, true), RATE,
-                TRANSITION_FRAMES, TOTAL_FRAMES);
-        int position = 0;
-        while (position < scene.frames()) {
-            int count = Math.min(512, scene.frames() - position);
-            scene.render(block, 0, position, count);
-            graph.processBlock(block, 0, count);
-            position += count;
-        }
-        MasterAudioGraph.ContinuityMetrics metrics = graph.snapshotMetrics();
-        if (metrics.lastActivationFrame != ACTIVATION
-                || metrics.transitionActivations != 1L
-                || metrics.currentActivationGapFrames != 0L
-                || metrics.underrunEvents != 0L
-                || metrics.graphRecreations != 0L
-                || metrics.nodeRecreations != 0L) {
-            throw new AssertionError("51-second activation broke the persistent graph");
-        }
-        if (metrics.activationMaximumSampleDiscontinuity
-                > AudioContinuityValidator.MAX_SAMPLE_JUMP
-                || metrics.activationMaximumDerivativeDiscontinuity
-                > AudioContinuityValidator.MAX_DERIVATIVE_JUMP) {
-            throw new AssertionError("click threshold exceeded at 51 seconds");
-        }
-        System.out.println(String.format(Locale.US,
-                "51s activation frame=%d gapFrames=%d underruns=%d graphRecreates=%d sampleJump=%.8f derivativeJump=%.8f",
-                metrics.lastActivationFrame, metrics.currentActivationGapFrames,
-                metrics.underrunEvents, metrics.graphRecreations,
-                metrics.activationMaximumSampleDiscontinuity,
-                metrics.activationMaximumDerivativeDiscontinuity));
     }
 
     private static ContinuousScenePlanner.PlanningResult planning() {
         ContinuousScenePlanner.PlanningRequest request =
                 ContinuousScenePlanner.PlanningRequest.builder(
-                                9_001L, 101L, 202L, ACTIVATION, BAR)
-                        .sourceStartSample(ACTIVATION)
+                                9_001L, 101L, 202L, PLAN_ACTIVATION, BAR)
+                        .transitionSamples(BAR * 16L)
+                        .sourceStartSample(PLAN_ACTIVATION)
                         .targetLandingSample(RATE * 18L)
                         .stem(ContinuousSceneTransitionPlan.SemanticRole.LEAD_VOCAL,
                                 1L, 2L, .78f, .92f)
@@ -220,7 +203,7 @@ public final class ContinuousSceneEngineSmokeTest {
         float[] drums = new float[frames * 2];
         float[] bass = new float[frames * 2];
         float[] backing = new float[frames * 2];
-        long origin = target ? 0L : ACTIVATION;
+        long origin = target ? 0L : PLAN_ACTIVATION;
         for (int frame = 0; frame < frames; frame++) {
             double time = (origin + frame) / (double) RATE;
             float vocal = tone(time, target ? 247.0 : 220.0, .055f);

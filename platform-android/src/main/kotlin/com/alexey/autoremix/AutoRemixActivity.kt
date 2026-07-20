@@ -5,25 +5,24 @@ package com.alexey.autoremix
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.ImageDecoder
+import android.media.MediaMetadataRetriever
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Size
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -32,6 +31,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -40,12 +40,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.ThumbDown
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.Button
@@ -67,6 +67,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -75,11 +76,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -88,8 +93,13 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import java.io.File
+import java.nio.ByteBuffer
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 open class AutoRemixActivity : ComponentActivity() {
     private var pendingStart = false
@@ -172,6 +182,14 @@ internal object AnalysisWork {
     }
 }
 
+internal data class UiTransformation(
+    val stemType: String,
+    val transformationType: String,
+    val progress: Float,
+    val intensity: Float,
+    val label: String,
+)
+
 internal data class EngineUiState(
     val running: Boolean,
     val paused: Boolean,
@@ -221,9 +239,34 @@ internal data class EngineUiState(
     val stemPathRate: Float,
     val legacyRate: Float,
     val basicCrossfadeRate: Float,
+    val playbackPhase: String = "TRACK_PLAYBACK",
+    val trackId: Long = -1L,
+    val entryPositionMs: Long = 0L,
+    val nextTransitionStartMs: Long? = null,
+    val plannedExitPositionMs: Long? = null,
+    val landingPositionMs: Long? = null,
+    val timelineConfidence: Float = 0f,
+    val markerSource: String = "AI_AUTOMATIC",
+    val markerStatus: String = "NONE",
+    val transitionProgress: Float = 0f,
+    val transitionStatus: String = "",
+    val transitionSourcePositionMs: Long = 0L,
+    val transitionTargetPositionMs: Long = 0L,
+    val estimatedLandingPositionMs: Long = 0L,
+    val transitionDurationMs: Long = 0L,
+    val transitionOperations: List<UiTransformation> = emptyList(),
+    val currentArtworkUri: String = "",
+    val transitionSourceArtworkUri: String = "",
+    val transitionTargetArtworkUri: String = "",
 ) {
     companion object {
-        fun read(): EngineUiState = EngineUiState(
+        fun read(): EngineUiState {
+            val playback = RemixEngineService.playbackUiSnapshot
+            val timeline = playback.trackTimeline
+            val transitionUi = playback.transitionUiState
+            val duration = timeline.durationMs.coerceAtLeast(1L)
+            val currentPosition = timeline.currentPositionMs.coerceIn(0L, duration)
+            return EngineUiState(
             running = RemixEngineService.running,
             paused = RemixEngineService.paused,
             status = RemixEngineService.status,
@@ -231,9 +274,9 @@ internal data class EngineUiState(
             meta = RemixEngineService.currentMeta,
             next = RemixEngineService.nextTrack,
             transition = RemixEngineService.transition,
-            progress = RemixEngineService.progress.coerceIn(0, 100) / 100f,
-            positionMs = RemixEngineService.playbackPositionMs,
-            durationMs = RemixEngineService.playbackDurationMs.coerceAtLeast(1L),
+            progress = currentPosition.toFloat() / duration,
+            positionMs = currentPosition,
+            durationMs = duration,
             readiness = RemixEngineService.transitionReadiness.coerceIn(0, 100),
             librarySize = RemixEngineService.librarySize,
             analyzedCount = RemixEngineService.analyzedCount,
@@ -242,8 +285,9 @@ internal data class EngineUiState(
             storageBudgetMb = RemixEngineService.storageBudgetMb,
             cacheBytes = RemixEngineService.cacheBytes,
             quality = if (RemixEngineService.nativeOutputActive) "Tier C · native Oboe" else "Tier C · AudioTrack fallback",
-            transitionInProgress = RemixEngineService.transitionInProgress,
-            transitionState = RemixEngineService.transitionState,
+            transitionInProgress = transitionUi.phase == PlaybackPhase.TRANSITION_ACTIVE ||
+                transitionUi.phase == PlaybackPhase.TRACK_LANDING,
+            transitionState = transitionUi.phase.name,
             guaranteedHorizonMs = RemixEngineService.guaranteedRenderedHorizonMs,
             candidateLevel = RemixEngineService.activeCandidateLevel,
             lowWatermarkEvents = RemixEngineService.bufferLowWatermarkEvents,
@@ -259,7 +303,7 @@ internal data class EngineUiState(
             selectedStrategy = RemixEngineService.selectedStrategy,
             aiPlannerUsed = RemixEngineService.aiPlannerUsed,
             stemSeparatorUsed = RemixEngineService.stemSeparatorUsed,
-            selectedAnchor = RemixEngineService.selectedAnchor,
+            selectedAnchor = transitionUi.selectedAnchor,
             anchorConfidence = RemixEngineService.anchorConfidence,
             vocalOwnerTimeline = RemixEngineService.vocalOwnerTimeline,
             stemOwnershipTimeline = RemixEngineService.stemOwnershipTimeline,
@@ -273,7 +317,36 @@ internal data class EngineUiState(
                 RemixEngineService.deterministicStemTransitionRate,
             legacyRate = RemixEngineService.legacyTransitionRate,
             basicCrossfadeRate = RemixEngineService.basicCrossfadeRate,
+            playbackPhase = playback.phase.name,
+            trackId = timeline.trackId,
+            entryPositionMs = timeline.entryPositionMs,
+            nextTransitionStartMs = timeline.nextTransitionStartMs,
+            plannedExitPositionMs = timeline.plannedExitPositionMs,
+            landingPositionMs = timeline.landingPositionFromPreviousMs,
+            timelineConfidence = timeline.timelineConfidence,
+            markerSource = timeline.markerSource.name,
+            markerStatus = timeline.markerStatus.name,
+            transitionProgress = transitionUi.progress.coerceIn(0f, 1f),
+            transitionStatus = transitionUi.humanReadableStatus,
+            transitionSourcePositionMs = transitionUi.sourcePositionMs,
+            transitionTargetPositionMs = transitionUi.targetPositionMs,
+            estimatedLandingPositionMs = transitionUi.estimatedLandingPositionMs,
+            transitionDurationMs = ((transitionUi.fullLandingSample - transitionUi.transitionStartSample)
+                .coerceAtLeast(0L) * 1_000L / 48_000L),
+            transitionOperations = transitionUi.activeStemOperations.map { event ->
+                UiTransformation(
+                    stemType = event.stemType.name,
+                    transformationType = event.transformationType.name,
+                    progress = event.progress.coerceIn(0f, 1f),
+                    intensity = event.intensity.coerceIn(0f, 1f),
+                    label = event.humanReadableLabel,
+                )
+            },
+            currentArtworkUri = RemixEngineService.currentArtworkUri,
+            transitionSourceArtworkUri = RemixEngineService.transitionSourceArtworkUri,
+            transitionTargetArtworkUri = RemixEngineService.transitionTargetArtworkUri,
         )
+        }
 
         fun demo() = EngineUiState(
             running = true,
@@ -324,6 +397,26 @@ internal data class EngineUiState(
             stemPathRate = 1f,
             legacyRate = 0f,
             basicCrossfadeRate = 0f,
+            playbackPhase = "TRANSITION_ARMED",
+            trackId = 7L,
+            entryPositionMs = 74_000L,
+            nextTransitionStartMs = 168_000L,
+            plannedExitPositionMs = 188_000L,
+            landingPositionMs = 74_000L,
+            timelineConfidence = .91f,
+            markerSource = "AI_AUTOMATIC",
+            markerStatus = "CONFIRMED",
+            transitionProgress = .42f,
+            transitionStatus = "Сохраняем гитарную линию",
+            transitionSourcePositionMs = 132_000L,
+            transitionTargetPositionMs = 61_000L,
+            estimatedLandingPositionMs = 74_000L,
+            transitionOperations = listOf(
+                UiTransformation("GUITAR", "ANCHOR_PRESERVED", .72f, .9f, "Сохраняем гитарную линию"),
+                UiTransformation("DRUMS", "STEM_HANDOFF", .54f, .82f, "Передаём ритм"),
+                UiTransformation("BASS", "BASS_HANDOFF", .38f, .76f, "Передаём бас"),
+                UiTransformation("LEAD_VOCAL", "STEM_HANDOFF", .18f, .68f, "Готовим вокал следующего трека"),
+            ),
         )
     }
 }
@@ -334,11 +427,17 @@ internal fun rememberEngineSnapshot(): EngineUiState {
     LaunchedEffect(Unit) {
         while (true) {
             state = EngineUiState.read()
-            delay(250)
+            delay(33)
         }
     }
     return state
 }
+
+private val EngineUiState.showsTransitionScene: Boolean
+    get() = transitionInProgress || transitionState == "TRANSITION_ACTIVE" || transitionState == "TRACK_LANDING"
+
+private val EngineUiState.showsTransitionPreparation: Boolean
+    get() = playbackPhase == "TRANSITION_PREPARING" || playbackPhase == "TRANSITION_ARMED"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -366,11 +465,20 @@ internal fun AutoRemixScreen(
             when (fixture) {
                 ScreenshotFixture.Full -> {
                     item { LibraryOverview(snapshot, onStart) }
-                    item { NowPlaying(snapshot, onAction) }
+                    if (snapshot.showsTransitionScene) {
+                        item { TransitionVisualization(snapshot) }
+                    } else {
+                        item { NowPlaying(snapshot, onAction) }
+                    }
                     item { Transport(snapshot, onAction, onStart) }
-                    item {
-                        TransitionCard(snapshot) {
-                            onAction(RemixEngineService.ACTION_EXPORT_DEBUG, 0L)
+                    if (snapshot.showsTransitionPreparation) {
+                        item { TransitionPreparationCard(snapshot) }
+                    }
+                    if (BuildConfig.DEBUG) {
+                        item {
+                            DebugInspector(snapshot) {
+                                onAction(RemixEngineService.ACTION_EXPORT_DEBUG, 0L)
+                            }
                         }
                     }
                     item { QueueCard(snapshot.queue) }
@@ -388,13 +496,23 @@ internal fun AutoRemixScreen(
                 ScreenshotFixture.Library -> item { LibraryOverview(snapshot, onStart) }
                 ScreenshotFixture.NowPlaying -> {
                     item { NowPlaying(snapshot, onAction) }
+                    if (snapshot.showsTransitionPreparation) {
+                        item { TransitionPreparationCard(snapshot) }
+                    }
                     item { Transport(snapshot, onAction, onStart) }
                 }
                 ScreenshotFixture.Transition -> item {
-                    TransitionCard(snapshot) {
-                        onAction(RemixEngineService.ACTION_EXPORT_DEBUG, 0L)
+                    if (snapshot.showsTransitionScene) {
+                        TransitionVisualization(snapshot)
+                    } else {
+                        TransitionPreparationCard(snapshot)
                     }
                 }
+                ScreenshotFixture.Debug -> item {
+                    DebugInspector(snapshot) {
+                            onAction(RemixEngineService.ACTION_EXPORT_DEBUG, 0L)
+                        }
+                    }
                 ScreenshotFixture.Queue -> item { QueueCard(snapshot.queue) }
                 ScreenshotFixture.AnalysisCache -> item { AnalysisCacheCard(snapshot) }
                 ScreenshotFixture.Settings -> item { SettingsCard(snapshot, onAction) }
@@ -408,6 +526,7 @@ internal enum class ScreenshotFixture {
     Library,
     NowPlaying,
     Transition,
+    Debug,
     Queue,
     AnalysisCache,
     Settings,
@@ -470,52 +589,164 @@ private fun Header(state: EngineUiState) {
 private fun NowPlaying(state: EngineUiState, onAction: (String, Long) -> Unit) {
     GlassCard {
         Row(verticalAlignment = Alignment.Top) {
+            ArtworkBadge(
+                label = "A",
+                color = PurpleLight,
+                artworkUri = state.currentArtworkUri,
+                size = 72.dp,
+                testTag = "current-artwork",
+            )
+            Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text("NOW PLAYING", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                 Spacer(Modifier.height(8.dp))
-                AnimatedContent(state.current, label = "track") { title ->
-                    Text(
-                        title.ifBlank { "Choose local music to begin" },
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontSize = 21.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+                Text(
+                    state.current.ifBlank { "Choose local music to begin" },
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontSize = 21.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
                 Text(state.meta, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, maxLines = 2)
             }
-            IconButton(onClick = { onAction(RemixEngineService.ACTION_LIKE, 0) }) {
-                Icon(
-                    if (state.feedback > 0) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
-                    contentDescription = "Like",
-                    tint = if (state.feedback > 0) Coral else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            Row {
+                IconButton(onClick = { onAction(RemixEngineService.ACTION_LIKE, 0) }, modifier = Modifier.testTag("like")) {
+                    Icon(
+                        if (state.feedback > 0) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
+                        contentDescription = "Like",
+                        tint = if (state.feedback > 0) Coral else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                IconButton(onClick = { onAction(RemixEngineService.ACTION_DISLIKE, 0) }, modifier = Modifier.testTag("dislike")) {
+                    Icon(
+                        Icons.Default.ThumbDown,
+                        contentDescription = "Dislike",
+                        tint = if (state.feedback < 0) Coral else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
         Spacer(Modifier.height(18.dp))
-        Waveform(state.progress, state.running && !state.paused)
-        Spacer(Modifier.height(8.dp))
-        var seek by remember(state.positionMs, state.durationMs) {
-            mutableFloatStateOf((state.positionMs.toFloat() / state.durationMs).coerceIn(0f, 1f))
+        TrackTimeline(state)
+    }
+}
+
+@Composable
+private fun TrackTimeline(state: EngineUiState) {
+    val duration = state.durationMs.coerceAtLeast(1L)
+    val current = state.positionMs.coerceIn(0L, duration)
+    val entry = state.entryPositionMs.coerceIn(0L, duration)
+    val transitionStart = state.nextTransitionStartMs?.coerceIn(0L, duration)
+    val plannedExit = state.plannedExitPositionMs?.coerceIn(0L, duration)
+    val currentFraction = current.toFloat() / duration
+    val entryFraction = entry.toFloat() / duration
+    val transitionFraction = transitionStart?.toFloat()?.div(duration)
+    val exitFraction = plannedExit?.toFloat()?.div(duration)
+    val inactiveTrack = MaterialTheme.colorScheme.outlineVariant
+    val playedTrack = Brush.horizontalGradient(listOf(PurpleLight, Aqua))
+    val markerDescription = when (state.markerStatus) {
+        "CALCULATING" -> "рассчитываем"
+        "TENTATIVE" -> "предварительно"
+        "CONFIRMED" -> "подтверждён"
+        "ACTIVE" -> "активен"
+        "PASSED" -> "пройден"
+        "CANCELLED" -> "отменён"
+        else -> if (state.timelineConfidence >= .7f) "подтверждён" else "предварительно"
+    }
+
+    BoxWithConstraints(
+        Modifier
+            .fillMaxWidth()
+            .height(52.dp)
+            .testTag("track-timeline"),
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            val y = size.height / 2f
+            drawLine(
+                inactiveTrack,
+                Offset(0f, y),
+                Offset(size.width, y),
+                strokeWidth = 8.dp.toPx(),
+                cap = StrokeCap.Round,
+            )
+            if (transitionFraction != null && exitFraction != null && exitFraction > transitionFraction) {
+                drawLine(
+                    Coral.copy(alpha = .22f),
+                    Offset(size.width * transitionFraction, y),
+                    Offset(size.width * exitFraction, y),
+                    strokeWidth = 12.dp.toPx(),
+                    cap = StrokeCap.Round,
+                )
+            }
+            drawLine(
+                brush = playedTrack,
+                start = Offset(0f, y),
+                end = Offset(size.width * currentFraction, y),
+                strokeWidth = 8.dp.toPx(),
+                cap = StrokeCap.Round,
+            )
+        }
+        if (transitionFraction != null && exitFraction != null && exitFraction > transitionFraction) {
+            Box(
+                Modifier
+                    .offset(x = maxWidth * transitionFraction)
+                    .width(maxWidth * (exitFraction - transitionFraction))
+                    .height(12.dp)
+                    .testTag("transition-span"),
+            )
+        }
+        Box(
+            Modifier
+                .offset(x = (maxWidth - 3.dp) * entryFraction)
+                .width(3.dp)
+                .height(30.dp)
+                .align(Alignment.CenterStart)
+                .clip(CircleShape)
+                .background(Aqua)
+                .testTag("entry-marker"),
+        )
+        if (transitionFraction != null) {
+            Box(
+                Modifier
+                    .offset(x = (maxWidth - 4.dp) * transitionFraction)
+                    .size(4.dp, 34.dp)
+                    .align(Alignment.CenterStart)
+                    .clip(CircleShape)
+                    .background(Coral)
+                    .testTag("transition-marker"),
+            )
         }
         Slider(
-            value = seek,
-            onValueChange = { seek = it },
-            onValueChangeFinished = {
-                onAction(RemixEngineService.ACTION_SEEK, (seek * state.durationMs).toLong())
-            },
+            value = currentFraction,
+            onValueChange = {},
+            enabled = false,
             colors = SliderDefaults.colors(
-                thumbColor = Aqua,
-                activeTrackColor = PurpleLight,
-                inactiveTrackColor = MaterialTheme.colorScheme.outlineVariant,
+                thumbColor = Color.White,
+                activeTrackColor = Color.Transparent,
+                inactiveTrackColor = Color.Transparent,
+                disabledThumbColor = Color.White,
+                disabledActiveTrackColor = Color.Transparent,
+                disabledInactiveTrackColor = Color.Transparent,
             ),
-            modifier = Modifier.testTag("progress-seek"),
+            modifier = Modifier.fillMaxSize().testTag("progress-seek"),
         )
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(time(state.positionMs), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
-            Text(time(state.durationMs), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
-        }
+    }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(time(current), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.testTag("track-position"))
+        Text(time(duration), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.testTag("track-duration"))
+    }
+    Spacer(Modifier.height(8.dp))
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text("Вход ${time(entry)}", color = Aqua, fontSize = 10.sp, modifier = Modifier.testTag("entry-label"))
+        Text(
+            transitionStart?.let {
+                "Переход ${time(it)} · $markerDescription"
+            } ?: "Ищем точку перехода",
+            color = if (transitionStart == null) MaterialTheme.colorScheme.onSurfaceVariant else Coral,
+            fontSize = 10.sp,
+            modifier = Modifier.testTag("transition-label"),
+        )
     }
 }
 
@@ -525,131 +756,363 @@ private fun Transport(
     onAction: (String, Long) -> Unit,
     onStart: () -> Unit,
 ) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-        CircleControl(Icons.AutoMirrored.Filled.ArrowBack, "Back") { onAction(RemixEngineService.ACTION_BACK, 0) }
-        CircleControl(Icons.Default.ThumbDown, "Dislike") { onAction(RemixEngineService.ACTION_DISLIKE, 0) }
-        Button(
-            onClick = {
-                if (!state.running) onStart()
-                else onAction(if (state.paused) RemixEngineService.ACTION_RESUME else RemixEngineService.ACTION_PAUSE, 0)
-            },
-            shape = CircleShape,
-            colors = ButtonDefaults.buttonColors(containerColor = Purple),
-            modifier = Modifier.size(68.dp).testTag("play-pause"),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+    val deckShape = RoundedCornerShape(46.dp)
+    val playDescription = if (!state.running || state.paused) "Play" else "Pause"
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Surface(
+            color = Color.Transparent,
+            shape = deckShape,
+            shadowElevation = 10.dp,
+            modifier = Modifier
+                .width(244.dp)
+                .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = .12f), deckShape)
+                .testTag("transport-deck"),
         ) {
-            Icon(if (!state.running || state.paused) Icons.Default.PlayArrow else Icons.Default.Pause, "Play or pause", modifier = Modifier.size(31.dp))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .96f),
+                                Purple.copy(alpha = .28f),
+                                MaterialTheme.colorScheme.surface.copy(alpha = .98f),
+                            ),
+                        ),
+                    )
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircleControl(Icons.Default.SkipPrevious, "Previous") { onAction(RemixEngineService.ACTION_BACK, 0) }
+                Surface(
+                    onClick = {
+                        if (!state.running) onStart()
+                        else onAction(if (state.paused) RemixEngineService.ACTION_RESUME else RemixEngineService.ACTION_PAUSE, 0)
+                    },
+                    shape = CircleShape,
+                    color = Color.Transparent,
+                    contentColor = Color.White,
+                    shadowElevation = 8.dp,
+                    modifier = Modifier
+                        .size(68.dp)
+                        .border(1.dp, Color.White.copy(alpha = .18f), CircleShape)
+                        .testTag("play-pause"),
+                ) {
+                    Box(
+                        Modifier.fillMaxSize().background(Brush.linearGradient(listOf(PurpleLight, Purple))),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            if (!state.running || state.paused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                            playDescription,
+                            modifier = Modifier.size(31.dp),
+                        )
+                    }
+                }
+                CircleControl(Icons.Default.SkipNext, "Next") { onAction(RemixEngineService.ACTION_SKIP, 0) }
+            }
         }
-        CircleControl(Icons.Default.SkipNext, "Next") { onAction(RemixEngineService.ACTION_SKIP, 0) }
     }
 }
 
 @Composable
 private fun CircleControl(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, action: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Surface(
-            color = MaterialTheme.colorScheme.surface,
-            shape = CircleShape,
-            modifier = Modifier.size(48.dp).clickable(onClick = action),
-        ) { Box(contentAlignment = Alignment.Center) { Icon(icon, label, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(22.dp)) } }
-        Spacer(Modifier.height(5.dp))
-        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+    Surface(
+        onClick = action,
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = .06f),
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shape = CircleShape,
+        tonalElevation = 2.dp,
+        shadowElevation = 2.dp,
+        modifier = Modifier
+            .size(52.dp)
+            .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = .10f), CircleShape)
+            .testTag("transport-${label.lowercase()}"),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(icon, label, modifier = Modifier.size(23.dp))
+        }
     }
 }
 
 @Composable
-private fun TransitionCard(state: EngineUiState, onExport: () -> Unit) {
-    val phaseLabel = when {
-        state.transitionInProgress -> "TRANSITION IN PROGRESS"
-        state.readiness >= 100 -> "TRANSITION READY"
-        else -> "PREPARING SEAMLESS TRANSITION"
-    }
-    val pulse = rememberInfiniteTransition(label = "ready").animateFloat(
-        initialValue = .45f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(1300, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-        label = "pulse",
-    ).value
-    GlassCard {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(9.dp).clip(CircleShape).background(Aqua.copy(alpha = if (state.running) pulse else .35f)))
-            Spacer(Modifier.width(9.dp))
-            Text(phaseLabel, color = Aqua, fontWeight = FontWeight.Bold, fontSize = 11.sp)
-            Spacer(Modifier.weight(1f))
-            Text("${state.readiness}%", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
+private fun TransitionPreparationCard(state: EngineUiState) {
+    Box(Modifier.testTag("transition-preparing")) {
+        GlassCard {
+            val ready = state.playbackPhase == "TRANSITION_ARMED"
+            Text(
+                if (ready) "ПЕРЕХОД ГОТОВ" else "ГОТОВИМ ПЕРЕХОД",
+                color = Aqua,
+                fontWeight = FontWeight.Bold,
+                fontSize = 11.sp,
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(state.next, color = MaterialTheme.colorScheme.onSurface, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
+            Text(
+                state.nextTransitionStartMs?.let { "Начнём на ${time(it)}" } ?: "Выбираем музыкальную границу",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
+            )
+            Spacer(Modifier.height(12.dp))
+            Box(Modifier.fillMaxWidth().height(5.dp).clip(CircleShape).background(MaterialTheme.colorScheme.outlineVariant)) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(state.readiness.coerceIn(0, 100) / 100f)
+                        .height(5.dp)
+                        .background(Brush.horizontalGradient(listOf(Purple, Aqua))),
+                )
+            }
         }
-        Spacer(Modifier.height(13.dp))
-        Text(state.next, color = MaterialTheme.colorScheme.onSurface, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
-        Text(state.transition, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, maxLines = 3)
-        Spacer(Modifier.height(14.dp))
-        Box(Modifier.fillMaxWidth().height(6.dp).clip(CircleShape).background(MaterialTheme.colorScheme.outlineVariant)) {
+    }
+}
+
+@Composable
+private fun TransitionVisualization(state: EngineUiState) {
+    Box(Modifier.fillMaxWidth().testTag("transition-visualization")) {
+        GlassCard {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("СОВЕРШАЕМ ПЕРЕХОД", color = Aqua, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                Text(
+                    "${(state.transitionProgress.coerceIn(0f, 1f) * 100).roundToInt()}%",
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.testTag("transition-progress-value"),
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "Совершаем переход",
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.testTag("transition-title"),
+            )
+            Text(
+                state.transitionStatus.ifBlank { "Перестраиваем музыкальную сцену" },
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 13.sp,
+                maxLines = 2,
+            )
+            Spacer(Modifier.height(16.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                ArtworkBadge(
+                    label = "A",
+                    color = PurpleLight,
+                    artworkUri = state.transitionSourceArtworkUri,
+                    size = 58.dp,
+                    testTag = "source-artwork",
+                )
+                Column(Modifier.weight(1f).padding(horizontal = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        state.current.substringBefore(" × ").ifBlank { "Текущий трек" },
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text("→", color = MaterialTheme.colorScheme.primary, fontSize = 22.sp)
+                    Text(
+                        state.next.ifBlank { "Следующий трек" },
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                ArtworkBadge(
+                    label = "B",
+                    color = Aqua,
+                    artworkUri = state.transitionTargetArtworkUri,
+                    size = 58.dp,
+                    testTag = "target-artwork",
+                )
+            }
+            Spacer(Modifier.height(18.dp))
             Box(
                 Modifier
-                    .fillMaxWidth(state.readiness / 100f)
-                    .height(6.dp)
-                    .background(Brush.horizontalGradient(listOf(Purple, Aqua))),
+                    .fillMaxWidth()
+                    .height(7.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.outlineVariant)
+                    .testTag("transition-progress"),
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(state.transitionProgress.coerceIn(0f, 1f))
+                        .height(7.dp)
+                        .background(Brush.horizontalGradient(listOf(PurpleLight, Aqua))),
+                )
+            }
+            Spacer(Modifier.height(16.dp))
+            state.transitionOperations.take(6).forEach { operation ->
+                TransformationRow(operation)
+                Spacer(Modifier.height(10.dp))
+            }
+            if (state.transitionOperations.isEmpty()) {
+                Text(
+                    "Музыкальные линии появятся после подтверждения плана",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ArtworkBadge(
+    label: String,
+    color: Color,
+    artworkUri: String,
+    size: Dp,
+    testTag: String,
+) {
+    val artwork = rememberArtworkBitmap(artworkUri)
+    Box(
+        Modifier
+            .size(size)
+            .clip(RoundedCornerShape(18.dp))
+            .background(Brush.linearGradient(listOf(color, color.copy(alpha = .45f))))
+            .testTag(testTag),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (artwork == null) {
+            Text(label, color = Color.White, fontWeight = FontWeight.Black, fontSize = 20.sp)
+        } else {
+            Image(
+                bitmap = artwork,
+                contentDescription = "$label album artwork",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize().testTag("$testTag-image"),
             )
         }
-        Spacer(Modifier.height(9.dp))
-        Text(state.status, color = MaterialTheme.colorScheme.primary, fontSize = 11.sp, maxLines = 2)
-        Text(
-            "${state.transitionState} | buffer ${time(state.guaranteedHorizonMs)} | L${state.candidateLevel.coerceAtLeast(0)} | low ${state.lowWatermarkEvents} | underrun ${state.outputUnderruns}",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 10.sp,
-            maxLines = 1,
-        )
-        Text(
-            "runway ${time(state.naturalRunwayMs)} | committed ${time(state.committedHorizonMs)} | planning ${time(state.planningHorizonMs)}",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 10.sp,
-        )
-        Text(
-            "repeat ${"%.2f".format(state.repetitionScore)} | novelty ${"%.2f".format(state.noveltyScore)} | neural ${state.neuralUpgrades} | ids ${state.recentFragmentIds.ifBlank { "none" }}",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 10.sp,
-            maxLines = 1,
-        )
-        Text(
-            "fallback: ${state.fallbackReason}",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 10.sp,
-            maxLines = 1,
-        )
-        Text(
-            "${state.selectedStrategy} | AI ${if (state.aiPlannerUsed) "yes" else "no"} | stems ${if (state.stemSeparatorUsed) "yes" else "no"} | anchor ${state.selectedAnchor} ${"%.0f".format(state.anchorConfidence * 100f)}%",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 10.sp,
-            maxLines = 1,
-        )
-        if (state.vocalOwnerTimeline.isNotBlank()) {
+    }
+}
+
+@Composable
+private fun rememberArtworkBitmap(artworkUri: String): ImageBitmap? {
+    val context = LocalContext.current.applicationContext
+    val artwork by produceState<ImageBitmap?>(initialValue = null, key1 = artworkUri) {
+        value = if (artworkUri.isBlank()) {
+            null
+        } else {
+            withContext(Dispatchers.IO) {
+                loadArtworkBitmap(context, artworkUri)
+            }
+        }
+    }
+    return artwork
+}
+
+private fun loadArtworkBitmap(context: android.content.Context, artworkUri: String): ImageBitmap? {
+    val uri = runCatching { Uri.parse(artworkUri) }.getOrNull() ?: return null
+    if (uri.scheme.equals("file", ignoreCase = true)) {
+        val path = uri.path ?: return null
+        return runCatching { decodeArtwork(ImageDecoder.createSource(File(path))) }.getOrNull()
+    }
+
+    if (uri.scheme.equals("content", ignoreCase = true)) {
+        runCatching {
+            context.contentResolver
+                .loadThumbnail(uri, Size(MAX_ARTWORK_EDGE_PX, MAX_ARTWORK_EDGE_PX), null)
+                .asImageBitmap()
+        }.getOrNull()?.let { return it }
+
+        loadEmbeddedArtwork(context, uri)?.let { return it }
+    }
+
+    return runCatching {
+        decodeArtwork(ImageDecoder.createSource(context.contentResolver, uri))
+    }.getOrNull()
+}
+
+private fun loadEmbeddedArtwork(context: android.content.Context, uri: Uri): ImageBitmap? {
+    val retriever = MediaMetadataRetriever()
+    return try {
+        retriever.setDataSource(context, uri)
+        val bytes = retriever.embeddedPicture ?: return null
+        decodeArtwork(ImageDecoder.createSource(ByteBuffer.wrap(bytes)))
+    } catch (_: Exception) {
+        null
+    } finally {
+        runCatching { retriever.release() }
+    }
+}
+
+private fun decodeArtwork(source: ImageDecoder.Source): ImageBitmap =
+    ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+        val largestEdge = maxOf(info.size.width, info.size.height).coerceAtLeast(1)
+        if (largestEdge > MAX_ARTWORK_EDGE_PX) {
+            val scale = MAX_ARTWORK_EDGE_PX.toFloat() / largestEdge
+            decoder.setTargetSize(
+                (info.size.width * scale).roundToInt().coerceAtLeast(1),
+                (info.size.height * scale).roundToInt().coerceAtLeast(1),
+            )
+        }
+    }.asImageBitmap()
+
+@Composable
+private fun TransformationRow(operation: UiTransformation) {
+    val stem = when (operation.stemType) {
+        "LEAD_VOCAL", "BACKING_VOCAL", "VOCAL_TEXTURE" -> "Вокал"
+        "GUITAR" -> "Гитара"
+        "DRUMS", "PERCUSSION" -> "Ударные"
+        "BASS" -> "Бас"
+        "HARMONY" -> "Гармония"
+        "ATMOSPHERE" -> "Атмосфера"
+        else -> operation.stemType.lowercase().replaceFirstChar { char -> char.uppercase() }
+    }
+    val label = operation.label.ifBlank {
+        when (operation.transformationType) {
+            "PITCH_SHIFT", "KEY_CHANGE" -> "Мягко меняем строй"
+            "TIME_STRETCH", "TEMPO_MORPH" -> "Синхронизируем ритм"
+            "BASS_HANDOFF" -> "Передаём бас"
+            "GUITAR_MORPH", "ANCHOR_PRESERVED" -> "Сохраняем гитарную линию"
+            "VOCAL_CHOP" -> "Вокальная текстура"
+            "DRUM_REARRANGEMENT" -> "Перестраиваем ритм"
+            "GENERATED_FILL" -> "Связываем музыкальные фразы"
+            else -> "Передаём музыкальную линию"
+        }
+    }
+    Column(Modifier.fillMaxWidth().testTag("operation-${operation.stemType}")) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(stem, color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, maxLines = 1)
+        }
+        Spacer(Modifier.height(5.dp))
+        Box(Modifier.fillMaxWidth().height(5.dp).clip(CircleShape).background(Purple.copy(alpha = .25f))) {
+            Box(
+                Modifier
+                    .fillMaxWidth(operation.progress.coerceIn(0f, 1f))
+                    .height(5.dp)
+                    .background(Brush.horizontalGradient(listOf(PurpleLight, Aqua))),
+            )
+        }
+    }
+}
+
+@Composable
+private fun DebugInspector(state: EngineUiState, onExport: () -> Unit) {
+    Box(Modifier.testTag("debug-inspector")) {
+        GlassCard {
+            Text("TIMELINE INSPECTOR", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+            Spacer(Modifier.height(9.dp))
+            Text("Original duration ${time(state.durationMs)}", color = MaterialTheme.colorScheme.onSurface, fontSize = 11.sp)
+            Text("Entry ${time(state.entryPositionMs)} · current ${time(state.positionMs)}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+            Text("Transition ${state.nextTransitionStartMs?.let(::time) ?: "—"} · exit ${state.plannedExitPositionMs?.let(::time) ?: "—"}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+            Text("Target landing ${state.estimatedLandingPositionMs.let(::time)} · state ${state.playbackPhase}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+            Text("Transition duration ${time(state.transitionDurationMs)}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+            Text("Stem ownership ${state.stemOwnershipTimeline.ifBlank { "—" }}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, maxLines = 2)
+            Text("Active operations ${state.transitionOperations.joinToString { it.transformationType }}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, maxLines = 2)
             Text(
-                "VOCALS ${state.vocalOwnerTimeline}",
-                color = MaterialTheme.colorScheme.primary,
+                "buffer ${time(state.guaranteedHorizonMs)} · underrun ${state.outputUnderruns} · gap ${"%.2f".format(state.activationGapMs)} ms",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 10.sp,
             )
-        }
-        if (state.stemOwnershipTimeline.isNotBlank()) {
-            Text(
-                state.stemOwnershipTimeline,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 9.sp,
-                maxLines = 5,
-            )
-        }
-        Text(
-            "activation gap ${"%.2f".format(state.activationGapMs)} ms | underrun ${state.activationUnderruns} | Δsample ${"%.3f".format(state.activationMaxSampleJump)} | Δderivative ${"%.3f".format(state.activationMaxDerivativeJump)}",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 9.sp,
-            maxLines = 1,
-        )
-        Text(
-            "ΔLUFS ${"%.2f".format(state.activationLufsJump)} | spectral ${"%.3f".format(state.activationSpectralFluxSpike)} | stem ${"%.0f".format(state.stemPathRate * 100f)}% | legacy ${"%.0f".format(state.legacyRate * 100f)}% | basic ${"%.0f".format(state.basicCrossfadeRate * 100f)}%",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 9.sp,
-            maxLines = 1,
-        )
-        Button(onClick = onExport, modifier = Modifier.padding(top = 8.dp)) {
-            Text("Export anonymized debug report")
+            Button(onClick = onExport, modifier = Modifier.padding(top = 8.dp)) {
+                Text("Export anonymized debug report")
+            }
         }
     }
 }
@@ -718,35 +1181,6 @@ private fun SettingsCard(state: EngineUiState, onAction: (String, Long) -> Unit)
 }
 
 @Composable
-private fun Waveform(progress: Float, animate: Boolean) {
-    val inactive = MaterialTheme.colorScheme.outlineVariant
-    val phase = rememberInfiniteTransition(label = "wave").animateFloat(
-        0f,
-        if (animate) 1f else 0f,
-        infiniteRepeatable(tween(2400), RepeatMode.Restart),
-        label = "phase",
-    ).value
-    Canvas(Modifier.fillMaxWidth().height(74.dp).testTag("waveform")) {
-        val count = 64
-        val gap = size.width / count
-        repeat(count) { index ->
-            val x = gap * (index + .5f)
-            val seeded = kotlin.math.sin(index * 1.73 + phase * 2.0).toFloat() * .5f + .5f
-            val envelope = .23f + seeded * .67f
-            val h = size.height * envelope
-            val played = index / count.toFloat() <= progress
-            drawLine(
-                color = if (played) lerp(PurpleLight, Aqua, index / count.toFloat()) else inactive,
-                start = Offset(x, (size.height - h) / 2),
-                end = Offset(x, (size.height + h) / 2),
-                strokeWidth = gap * .48f,
-                cap = StrokeCap.Round,
-            )
-        }
-    }
-}
-
-@Composable
 private fun GlassCard(content: @Composable ColumnScope.() -> Unit) {
     val colors = MaterialTheme.colorScheme
     Card(
@@ -797,6 +1231,7 @@ private fun time(ms: Long): String {
     return "%d:%02d".format(seconds / 60, seconds % 60)
 }
 
+private const val MAX_ARTWORK_EDGE_PX = 512
 private val Background = Color(0xFF090B12)
 private val Panel = Color(0xFF141824)
 private val PanelLight = Color(0xFF292E41)

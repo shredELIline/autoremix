@@ -60,6 +60,9 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
     public static volatile String currentTrack = "—";
     public static volatile String currentMeta = "—";
     public static volatile String nextTrack = "—";
+    public static volatile String currentArtworkUri = "";
+    public static volatile String transitionSourceArtworkUri = "";
+    public static volatile String transitionTargetArtworkUri = "";
     public static volatile String transition = "—";
     public static volatile int librarySize;
     public static volatile int progress;
@@ -107,11 +110,14 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
     public static volatile float legacyTransitionRate;
     public static volatile float basicCrossfadeRate;
     public static volatile String transitionDiagnosticsJson = "{}";
+    public static volatile PlaybackUiSnapshot playbackUiSnapshot = PlaybackUiSnapshot.IDLE;
 
     private static final int NOTIFICATION_ID = 903;
     private static final String CHANNEL = "autoremix_pcm";
-    private static final long RUNWAY_CHUNK_MS = 20_000L;
+    /** Decode/buffer granularity only. Never expose as song or transition duration. */
+    private static final long DECODE_CHUNK_TARGET_MS = 20_000L;
     private static final long FALLBACK_BRIDGE_MS = 12_000L;
+    private static final long UI_PROJECTION_INTERVAL_MS = 33L;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final AtomicBoolean renderTaskPending = new AtomicBoolean();
@@ -140,6 +146,16 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
     private volatile TrackAnalysis planningAnalysis;
     private volatile TrackAnalysis.Fragment planningFragment;
     private volatile long planningPositionMs;
+    private volatile MusicalTimelinePlanner.TrackPlan planningTrackPlan;
+    private volatile MusicalTimelinePlanner.TrackPlan currentTrackPlan;
+    private volatile MusicalTimelinePlanner.TrackPlan pendingTargetTrackPlan;
+    private volatile Long currentLandingPositionMs;
+    private volatile Track pendingTargetTrack;
+    private volatile RenderedScene plannedTransitionScene;
+    private volatile PlaybackPhase playbackPhase = PlaybackPhase.IDLE;
+    private volatile PlaybackPhase phaseBeforePause = PlaybackPhase.IDLE;
+    private volatile boolean landingPublished;
+    private String deferredInvalidationReason;
     private int chaos = 62;
     private int patience = 82;
     private boolean overlays = true;
@@ -269,6 +285,7 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
             continuationTrackId = -1L;
             continuationFragmentId = 0L;
             continuationAnchorSourceId = 0L;
+            deferredInvalidationReason = null;
         }
         stopAudioOnly();
         int token = ++generation;
@@ -285,6 +302,19 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
         previousAnchorId = -1L;
         activeScene = null;
         transitioningScene = null;
+        plannedTransitionScene = null;
+        planningTrackPlan = null;
+        currentTrackPlan = null;
+        pendingTargetTrackPlan = null;
+        pendingTargetTrack = null;
+        currentLandingPositionMs = null;
+        landingPublished = false;
+        playbackPhase = PlaybackPhase.IDLE;
+        phaseBeforePause = PlaybackPhase.IDLE;
+        playbackUiSnapshot = PlaybackUiSnapshot.IDLE;
+        currentArtworkUri = "";
+        transitionSourceArtworkUri = "";
+        transitionTargetArtworkUri = "";
         recent.clear();
         cache.clear();
         analyzedCount = AnalysisCacheStore.entryCount(this);
@@ -324,6 +354,7 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
         player.start();
         if (sessionPlayer != null) sessionPlayer.refresh();
         worker.submit(() -> bootstrap(token));
+        schedulePlaybackUiProjection(token);
         scheduleProgress(token);
     }
 
@@ -341,12 +372,17 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
             Track first = found.get(random.nextInt(found.size()));
             TrackAnalysis analysis = analyze(first);
             TrackAnalysis.Fragment fragment = analysis.chooseFragment(random, .55f, chaos, first.durationMs);
+            MusicalTimelinePlanner.TrackPlan firstPlan = MusicalTimelinePlanner.planTrack(
+                    first, analysis, fragment, fragment.cueMs, sequence);
             main.post(() -> {
                 status = "Декодирую первый сольный участок…";
                 currentTrack = first.displayName();
                 currentMeta = analysis.summary() + " · " + analysis.vibeSummary();
             });
-            RenderedScene prelude = SceneRenderer.renderPrelude(this, first, analysis, fragment, 52_000L)
+            long firstChunkMs = Math.max(1_000L, Math.min(DECODE_CHUNK_TARGET_MS,
+                    firstPlan.transitionStartPositionMs - firstPlan.entryPositionMs));
+            RenderedScene prelude = SceneRenderer.renderPrelude(
+                            this, first, analysis, fragment, firstChunkMs)
                     .forPlan(token, epoch);
             synchronized (planControl) {
                 if (!isCurrentPlan(token, epoch)) return;
@@ -354,10 +390,16 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
                 planningAnalysis = prelude.anchorAnalysis;
                 planningFragment = prelude.anchorFragment;
                 planningPositionMs = prelude.anchorPositionMs;
+                planningTrackPlan = firstPlan;
+                currentTrackPlan = firstPlan;
+                currentArtworkUri = artworkUri(first);
+                currentLandingPositionMs = null;
+                playbackPhase = PlaybackPhase.TRACK_PLAYBACK;
                 remember(first.id);
                 if (!player.offer(prelude)) {
                     throw new IllegalStateException("PCM queue rejected prelude");
                 }
+                publishPlaybackSnapshot();
             }
             main.post(() -> {
                 status = "Играет сольный участок; строю stem-переход заранее";
@@ -411,14 +453,25 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
         TrackAnalysis outgoingAnalysis;
         TrackAnalysis.Fragment outgoingFragment;
         long outgoingPositionMs;
+        MusicalTimelinePlanner.TrackPlan outgoingTimelinePlan;
         synchronized (planControl) {
             if (!isCurrentPlan(token, epoch)) return;
             outgoingTrack = planningTrack;
             outgoingAnalysis = planningAnalysis;
             outgoingFragment = planningFragment;
             outgoingPositionMs = planningPositionMs;
+            outgoingTimelinePlan = planningTrackPlan;
         }
         if (outgoingTrack == null || outgoingAnalysis == null || outgoingFragment == null) return;
+        if (outgoingTimelinePlan == null || outgoingTimelinePlan.trackId != outgoingTrack.id) {
+            outgoingTimelinePlan = MusicalTimelinePlanner.planTrack(outgoingTrack,
+                    outgoingAnalysis, outgoingFragment, outgoingPositionMs, sequence);
+            planningTrackPlan = outgoingTimelinePlan;
+        }
+        if (outgoingPositionMs < outgoingTimelinePlan.transitionStartPositionMs) {
+            fillNaturalRunway(token, epoch);
+            return;
+        }
 
         Candidate candidate = chooseCandidate(outgoingTrack, outgoingAnalysis, outgoingFragment);
         if (candidate == null) {
@@ -437,6 +490,11 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
             publishTransitionState();
             transitionMachine.beginPreparing();
             publishTransitionState();
+            playbackPhase = PlaybackPhase.TRANSITION_PREPARING;
+            pendingTargetTrack = candidate.track;
+            transitionSourceArtworkUri = artworkUri(outgoingTrack);
+            transitionTargetArtworkUri = artworkUri(candidate.track);
+            publishPlaybackSnapshot();
         }
         final Candidate selected = candidate;
         main.post(() -> {
@@ -464,9 +522,7 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
             }
         }
 
-        long queuedFrames = player.producerHorizonFrames();
-        long boundaryRunwayFrames = boundaryRunway == null ? 0L : boundaryRunway.audio.frames();
-        long boundary = player.masterSampleClock() + queuedFrames + boundaryRunwayFrames;
+        long boundary = player.transitionActivationSample(boundaryRunway);
         ContinuousScenePlanner.PlanningResult planningResult = null;
         AudioContinuityValidator.Metrics landingMetrics = null;
         RenderedScene prepared;
@@ -475,7 +531,8 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
             SceneRenderer.ContinuousRender continuous = SceneRenderer.renderContinuousTransition(this,
                     outgoingTrack, outgoingAnalysis, outgoingFragment, outgoingPositionMs,
                     candidate.track, candidate.analysis, candidate.fragment, candidate.plan,
-                    nextTransitionId(), boundary, 0, escapeScene,
+                    nextTransitionId(), boundary,
+                    outgoingTimelinePlan.estimatedTransitionLengthMs, 0, escapeScene,
                     () -> player != null && player.bufferedHorizonMs() >= lowWatermarkMs());
             prepared = continuous.scene;
             planningResult = continuous.planning;
@@ -514,14 +571,25 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
         }
         if (!running || token != generation || epoch != planEpoch.get() || player == null) return;
         prepared = prepared.asCandidate(boundary, candidateLevel, token, epoch);
+        SceneTimelineMapping preparedMapping = prepared.timelineMapping;
+        MusicalTimelinePlanner.TrackPlan targetTimelinePlan =
+                MusicalTimelinePlanner.planTrackAfterRenderedRunway(
+                        prepared.anchorTrack, prepared.anchorAnalysis,
+                        prepared.anchorFragment, preparedMapping.targetLandingPositionMs,
+                        prepared.anchorPositionMs, sequence + 1);
         RenderedScene landingRunway = null;
         if (prepared.preparedStemScene != null) {
             try {
-                landingRunway = SceneRenderer.renderContinuation(this,
-                        prepared.anchorTrack, prepared.anchorAnalysis,
-                        prepared.anchorFragment, prepared.anchorPositionMs,
-                        RUNWAY_CHUNK_MS,
-                        "Prepared B runway after in-scene landing").forPlan(token, epoch);
+                long runwayMs = Math.min(DECODE_CHUNK_TARGET_MS,
+                        Math.max(0L, targetTimelinePlan.transitionStartPositionMs
+                                - prepared.anchorPositionMs));
+                if (runwayMs >= 1_000L) {
+                    landingRunway = SceneRenderer.renderContinuation(this,
+                            prepared.anchorTrack, prepared.anchorAnalysis,
+                            prepared.anchorFragment, prepared.anchorPositionMs,
+                            runwayMs,
+                            "Prepared B runway after in-scene landing").forPlan(token, epoch);
+                }
             } catch (Exception error) {
                 Log.w(TAG, "event=landing_runway_prepare_failed target="
                         + prepared.anchorTrack.id + " reason="
@@ -562,6 +630,21 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
                     activeCandidateLevel = candidateLevel;
                     RenderedScene planningAnchor = landingRunway == null
                             ? prepared : landingRunway;
+                    SceneTimelineMapping mapping = preparedMapping;
+                    currentTrackPlan = outgoingTimelinePlan.withTransition(
+                            mapping.sourceStartPositionMs,
+                            mapping.sourceExitPositionMs,
+                            Math.max(1L, mapping.sourceExitPositionMs
+                                    - mapping.sourceStartPositionMs),
+                            planningResult == null || planningResult.plan == null
+                                    ? outgoingTimelinePlan.confidence
+                                    : planningResult.plan.confidence);
+                    pendingTargetTrackPlan = targetTimelinePlan;
+                    planningTrackPlan = pendingTargetTrackPlan;
+                    pendingTargetTrack = prepared.anchorTrack;
+                    plannedTransitionScene = prepared;
+                    landingPublished = false;
+                    playbackPhase = PlaybackPhase.TRANSITION_ARMED;
                     planningTrack = planningAnchor.anchorTrack;
                     planningAnalysis = planningAnchor.anchorAnalysis;
                     planningFragment = planningAnchor.anchorFragment;
@@ -583,6 +666,7 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
                     naturalRunwayRemainingMs = runwayTrack == null ? 0L
                             : Math.max(0L, runwayTrack.durationMs - planningPositionMs
                             - FALLBACK_BRIDGE_MS - 1_000L);
+                    publishPlaybackSnapshot();
                     published = true;
                 } else {
                     transitionMachine.fail();
@@ -710,11 +794,16 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
             ContinuousSceneTransitionPlan.Strategy expectedStrategy) {
         ContinuousScenePlanner.PlanningResult planning = planFallback(
                 outgoingTrack, outgoingAnalysis, outgoingFragment, outgoingPositionMs,
-                candidate, activationSample, reason, expectedStrategy, scene.frames());
+                candidate, activationSample, reason, expectedStrategy, scene);
         if (!planning.hasPlan() || planning.plan.selectedStrategy != expectedStrategy) {
             throw new IllegalStateException("fallback plan rejected: " + expectedStrategy);
         }
-        return new FallbackRender(scene.withContinuousPlan(planning.plan), planning);
+        RenderedScene planned = scene.withContinuousPlan(planning.plan)
+                .withTimelineMapping(scene.timelineMapping.withMasterRange(
+                        planning.plan.activationSample, planning.plan.landingSample))
+                .withTransformationEvents(planning.plan.transformationEvents(
+                        scene.timelineMapping.targetTempoRatio));
+        return new FallbackRender(planned, planning);
     }
 
     private ContinuousScenePlanner.PlanningResult planFallback(
@@ -723,7 +812,8 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
             Candidate candidate, long activationSample,
             ContinuousSceneTransitionPlan.FallbackReason reason,
             ContinuousSceneTransitionPlan.Strategy strategy,
-            long transitionSamples) {
+            RenderedScene scene) {
+        long transitionSamples = scene.frames();
         long samplesPerBar = Math.max(1L, Math.round(
                 barsToMs(outgoingAnalysis, 1) * SceneAudioPlayer.outputRate() / 1_000.0));
         boolean separatorAvailable = reason
@@ -736,9 +826,11 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
                                 nextTransitionId(), outgoingTrack.id, candidate.track.id,
                                 activationSample, samplesPerBar)
                         .transitionSamples(transitionSamples)
-                        .sourceStartSample(Math.max(0L, Math.round(outgoingPositionMs
+                        .sourceStartSample(Math.max(0L, Math.round(
+                                scene.timelineMapping.sourceStartPositionMs
                                 * SceneAudioPlayer.outputRate() / 1_000.0)))
-                        .targetLandingSample(Math.max(0L, Math.round(candidate.fragment.cueMs
+                        .targetLandingSample(Math.max(0L, Math.round(
+                                scene.timelineMapping.targetLandingPositionMs
                                 * SceneAudioPlayer.outputRate() / 1_000.0)))
                         .separator(separatorAvailable, separatorConfidence)
                         .buffer(true, Math.max(transitionSamples, samplesPerBar * 8L),
@@ -814,14 +906,17 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
             TrackAnalysis.Fragment fragment = planningFragment;
             long position = planningPositionMs;
             if (track == null || analysis == null || fragment == null) return;
-            long available = track.durationMs - position - FALLBACK_BRIDGE_MS - 1_000L;
+            MusicalTimelinePlanner.TrackPlan timelinePlan = planningTrackPlan;
+            long transitionMarker = timelinePlan != null && timelinePlan.trackId == track.id
+                    ? timelinePlan.transitionStartPositionMs
+                    : track.durationMs - FALLBACK_BRIDGE_MS - 1_000L;
+            if (position >= transitionMarker) return;
+            long available = Math.min(
+                    track.durationMs - position - FALLBACK_BRIDGE_MS - 1_000L,
+                    transitionMarker - position);
             naturalRunwayRemainingMs = Math.max(0L, available);
-            if (available < 8_000L) {
-                fillPlannedContinuation(token, epoch, track, analysis, fragment,
-                        Math.max(1, 3 - chunks));
-                return;
-            }
-            long duration = Math.min(RUNWAY_CHUNK_MS, available);
+            if (available < 250L) return;
+            long duration = Math.min(DECODE_CHUNK_TARGET_MS, available);
             RenderedScene continuation;
             try {
                 continuation = SceneRenderer.renderContinuation(this, track, analysis, fragment,
@@ -1017,6 +1112,7 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
     private void failCurrentPlan(int token, int epoch) {
         synchronized (planControl) {
             if (!isCurrentPlan(token, epoch)) return;
+            deferredInvalidationReason = null;
             transitionMachine.fail();
             publishTransitionState();
         }
@@ -1026,6 +1122,190 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
         transitionState = transitionMachine.state().name();
         transitionReadiness = transitionMachine.readinessPercent();
         missedActivationBoundaries = transitionMachine.missedBoundaries();
+    }
+
+    private void completeAudibleLanding(RenderedScene scene) {
+        String deferredReason;
+        synchronized (planControl) {
+            if (scene != transitioningScene && scene != plannedTransitionScene) return;
+            if (transitionMachine.state() == TransitionStateMachine.State.TRANSITIONING) {
+                transitionMachine.land();
+            }
+            transitioningScene = null;
+            plannedTransitionScene = null;
+            transitionInProgress = false;
+            activeCandidateLevel = -1;
+            transitionSourceArtworkUri = "";
+            transitionTargetArtworkUri = "";
+            deferredReason = deferredInvalidationReason;
+            deferredInvalidationReason = null;
+            publishTransitionState();
+        }
+        if (deferredReason != null) {
+            main.post(() -> invalidateFuturePlan(deferredReason));
+        }
+    }
+
+    private void publishPlaybackSnapshot() {
+        SceneAudioPlayer audioPlayer = player;
+        long masterSample = audioPlayer == null ? 0L : audioPlayer.audibleMasterSample();
+        PlaybackPhase underlyingPhase = playbackPhase;
+        RenderedScene transitionScene = underlyingPhase == PlaybackPhase.ERROR ? null
+                : transitioningScene != null ? transitioningScene : plannedTransitionScene;
+        TransitionUiState transitionSnapshot = TransitionUiState.EMPTY;
+        long currentPositionMs = currentTimelinePositionMs(audioPlayer, masterSample);
+
+        if (transitionScene != null && transitionScene.continuousPlan != null) {
+            ContinuousSceneTransitionPlan plan = transitionScene.continuousPlan;
+            SceneTimelineMapping mapping = transitionScene.timelineMapping;
+            long landingStartSample = plan.targetCoreOwnershipSample();
+            PlaybackPhase transitionPhase;
+            if (masterSample < plan.activationSample) {
+                transitionPhase = underlyingPhase == PlaybackPhase.TRANSITION_PREPARING
+                        ? PlaybackPhase.TRANSITION_PREPARING
+                        : PlaybackPhase.TRANSITION_ARMED;
+            } else if (masterSample < landingStartSample) {
+                transitionPhase = PlaybackPhase.TRANSITION_ACTIVE;
+            } else {
+                transitionPhase = PlaybackPhase.TRACK_LANDING;
+            }
+
+            boolean qualityPassed = lastLandingMetrics == null
+                    || lastLandingMetrics.passesTransitionGate();
+            long landingProbe = Math.min(masterSample, plan.landingSample - 1L);
+            boolean fullLanding = masterSample >= mapping.fullLandingSample
+                    && plan.fullTrackLandingAt(landingProbe)
+                    && qualityPassed;
+            if (fullLanding && !landingPublished) {
+                landingPublished = true;
+                currentLandingPositionMs = mapping.targetLandingPositionMs;
+                if (pendingTargetTrackPlan != null) {
+                    currentTrackPlan = pendingTargetTrackPlan;
+                }
+                playbackPhase = PlaybackPhase.TRACK_PLAYBACK;
+                underlyingPhase = PlaybackPhase.TRACK_PLAYBACK;
+                currentPositionMs = mapping.targetPositionMs(masterSample);
+                Track landedTrack = pendingTargetTrack;
+                if (landedTrack != null) {
+                    currentTrack = landedTrack.displayName();
+                    currentArtworkUri = artworkUri(landedTrack);
+                }
+                currentMeta = transitionScene.anchorAnalysis.summary() + " · "
+                        + transitionScene.anchorAnalysis.vibeSummary();
+                completeAudibleLanding(transitionScene);
+            } else if (!landingPublished) {
+                playbackPhase = transitionPhase;
+                underlyingPhase = transitionPhase;
+                if (masterSample >= plan.activationSample) {
+                    currentPositionMs = mapping.sourcePositionMs(masterSample);
+                }
+            } else {
+                underlyingPhase = PlaybackPhase.TRACK_PLAYBACK;
+                currentPositionMs = mapping.targetPositionMs(masterSample);
+            }
+
+            if (!landingPublished) {
+                List<AudioTransformationEvent> activeOperations = new ArrayList<>();
+                for (AudioTransformationEvent event : transitionScene.transformationEvents) {
+                    if (masterSample >= event.startSample && masterSample < event.endSample) {
+                        activeOperations.add(event.atSample(masterSample));
+                    }
+                }
+                float transitionProgress = (masterSample - plan.activationSample)
+                        / (float) Math.max(1L, plan.landingSample - plan.activationSample);
+                String anchor = plan.selectedAnchorSet.isEmpty() ? ""
+                        : plan.selectedAnchorSet.get(0).semanticRole.name();
+                transitionSnapshot = new TransitionUiState(
+                        plan.transitionId, mapping.sourceTrackId, mapping.targetTrackId,
+                        transitionPhase, transitionProgress, activeOperations,
+                        mapping.sourcePositionMs(masterSample),
+                        mapping.targetPositionMs(masterSample),
+                        mapping.targetLandingPositionMs, plan.confidence, anchor,
+                        transitionStatus(transitionPhase), masterSample,
+                        plan.activationSample, plan.landingSample);
+            }
+        } else if (underlyingPhase == PlaybackPhase.TRANSITION_PREPARING) {
+            MusicalTimelinePlanner.TrackPlan source = currentTrackPlan;
+            Track target = pendingTargetTrack;
+            transitionSnapshot = new TransitionUiState(
+                    -1L, source == null ? -1L : source.trackId,
+                    target == null ? -1L : target.id,
+                    PlaybackPhase.TRANSITION_PREPARING, 0f, List.of(),
+                    currentPositionMs, 0L, 0L, 0f, "",
+                    transitionStatus(PlaybackPhase.TRANSITION_PREPARING),
+                    masterSample, 0L, 1L);
+        }
+
+        MusicalTimelinePlanner.TrackPlan timelinePlan = currentTrackPlan;
+        TrackPlaybackTimeline trackTimeline;
+        if (timelinePlan == null) {
+            trackTimeline = TrackPlaybackTimeline.EMPTY;
+        } else {
+            trackTimeline = timelinePlan.timeline(currentPositionMs,
+                    markerStatus(underlyingPhase, currentPositionMs, timelinePlan),
+                    currentLandingPositionMs);
+        }
+        PlaybackPhase publicPhase = paused ? PlaybackPhase.PAUSED : underlyingPhase;
+        PlaybackUiSnapshot snapshot = new PlaybackUiSnapshot(
+                publicPhase, trackTimeline, transitionSnapshot);
+        playbackUiSnapshot = snapshot;
+        playbackPositionMs = trackTimeline.currentPositionMs;
+        playbackDurationMs = trackTimeline.durationMs;
+        progress = Math.max(0, Math.min(100,
+                Math.round(playbackPositionMs * 100f / Math.max(1L, playbackDurationMs))));
+    }
+
+    private long currentTimelinePositionMs(SceneAudioPlayer audioPlayer, long masterSample) {
+        RenderedScene current = audioPlayer == null ? null : audioPlayer.audibleScene();
+        MusicalTimelinePlanner.TrackPlan plan = currentTrackPlan;
+        if (current == null || audioPlayer == null) {
+            return plan == null ? 0L : plan.entryPositionMs;
+        }
+        SceneTimelineMapping mapping = current.timelineMapping;
+        if (!mapping.transition) {
+            return mapping.normalPositionMs(audioPlayer.audibleSceneFrame(current));
+        }
+        return landingPublished ? mapping.targetPositionMs(masterSample)
+                : mapping.sourcePositionMs(masterSample);
+    }
+
+    private static TrackPlaybackTimeline.MarkerStatus markerStatus(
+            PlaybackPhase phase, long currentPositionMs,
+            MusicalTimelinePlanner.TrackPlan plan) {
+        if (phase == PlaybackPhase.ERROR) return TrackPlaybackTimeline.MarkerStatus.CANCELLED;
+        if (phase == PlaybackPhase.TRANSITION_ACTIVE
+                || phase == PlaybackPhase.TRACK_LANDING) {
+            return TrackPlaybackTimeline.MarkerStatus.ACTIVE;
+        }
+        if (phase == PlaybackPhase.TRANSITION_PREPARING) {
+            return TrackPlaybackTimeline.MarkerStatus.TENTATIVE;
+        }
+        if (phase == PlaybackPhase.TRANSITION_ARMED) {
+            return TrackPlaybackTimeline.MarkerStatus.CONFIRMED;
+        }
+        if (currentPositionMs > plan.trackExitPositionMs) {
+            return TrackPlaybackTimeline.MarkerStatus.PASSED;
+        }
+        return TrackPlaybackTimeline.MarkerStatus.CONFIRMED;
+    }
+
+    private static String transitionStatus(PlaybackPhase phase) {
+        switch (phase) {
+            case TRANSITION_PREPARING:
+                return "Preparing musical transition";
+            case TRANSITION_ARMED:
+                return "Transition ready";
+            case TRANSITION_ACTIVE:
+                return "Transforming stems";
+            case TRACK_LANDING:
+                return "Landing on target track";
+            default:
+                return "";
+        }
+    }
+
+    private static String artworkUri(Track track) {
+        return track == null || track.uri == null ? "" : track.uri.toString();
     }
 
 
@@ -1186,15 +1466,27 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
                 previousAnchorId = previous.anchorTrack.id;
             }
             if (scene.transitionScene) {
+                long actualBoundary = player == null ? -1L : player.masterSampleClock();
                 if (!scene.validCandidate || transitionMachine.state()
                         != TransitionStateMachine.State.WAITING_FOR_ACTIVATION_BOUNDARY
-                        || !transitionMachine.activateAtBoundary(scene.activationBoundary)) return false;
+                        || actualBoundary != scene.activationBoundary
+                        || !transitionMachine.activateAtBoundary(actualBoundary)) {
+                    Log.e(TAG, "event=activation_boundary_mismatch planned="
+                            + scene.activationBoundary + " actual=" + actualBoundary);
+                    transitionMachine.fail();
+                    planEpoch.incrementAndGet();
+                    publishTransitionState();
+                    main.post(() -> invalidateFuturePlan(
+                            "Граница активации пропущена · перестраиваю план"));
+                    return false;
+                }
                 activeCandidateLevel = scene.candidateLevel;
                 transitionInProgress = true;
                 transitioningScene = scene;
                 publishTransitionState();
             }
             activeScene = scene;
+            publishPlaybackSnapshot();
             return true;
         }
     }
@@ -1206,16 +1498,18 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
             sceneDurationMs = Math.max(1L, scene.durationMs());
             transitionInProgress = transitionMachine.state()
                     == TransitionStateMachine.State.TRANSITIONING;
-            playbackPositionMs = 0L;
-            playbackDurationMs = sceneDurationMs;
-            progress = 0;
-            currentTrack = scene.title;
-            currentMeta = scene.description;
+            boolean waitingForLanding = transitioningScene != null && !landingPublished;
+            if (!scene.transitionScene && !waitingForLanding) {
+                currentTrack = scene.title;
+                currentMeta = scene.description;
+                currentArtworkUri = artworkUri(scene.anchorTrack);
+                feedbackState = getSharedPreferences("feedback", MODE_PRIVATE)
+                        .getInt("track_" + scene.anchorTrack.id, 0);
+            }
             status = scene.transitionScene
                     ? "Stem Director: один слой остаётся непрерывным, остальные плавно морфятся"
                     : "Трек играет сольный участок";
-            feedbackState = getSharedPreferences("feedback", MODE_PRIVATE)
-                    .getInt("track_" + scene.anchorTrack.id, 0);
+            publishPlaybackSnapshot();
             updateNotification();
             if (sessionPlayer != null) sessionPlayer.refresh();
             scheduleRenderAhead(generation);
@@ -1229,11 +1523,7 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
                 boolean currentPlan = scene.belongsToPlan(generation, planEpoch.get());
                 if (scene == transitioningScene && currentPlan
                         && transitionMachine.state() == TransitionStateMachine.State.TRANSITIONING) {
-                    transitionMachine.land();
-                    transitioningScene = null;
-                    publishTransitionState();
-                    transitionInProgress = false;
-                    activeCandidateLevel = -1;
+                    publishPlaybackSnapshot();
                 }
                 if (replanAfterCurrent && currentPlan) {
                     replanAfterCurrent = false;
@@ -1243,6 +1533,7 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
                     planningPositionMs = scene.anchorPositionMs;
                 }
                 if (activeScene == scene) activeScene = null;
+                publishPlaybackSnapshot();
             }
             if (sessionPlayer != null) sessionPlayer.refresh();
             scheduleRenderAhead(generation);
@@ -1276,17 +1567,45 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
 
     private void seekEngine(long positionMs) {
         if (!running || player == null) return;
+        if (transitioningScene != null
+                && transitionMachine.state() == TransitionStateMachine.State.TRANSITIONING) {
+            status = "Перемотка доступна после полного landing";
+            return;
+        }
         long requested = Math.max(0L, Math.min(playbackDurationMs, positionMs));
-        player.seekTo(requested);
+        playbackPhase = PlaybackPhase.SEEKING;
+        publishPlaybackSnapshot();
+        RenderedScene current = activeScene;
+        long localPositionMs = requested;
+        if (current != null && !current.timelineMapping.transition) {
+            localPositionMs = Math.max(0L,
+                    requested - current.timelineMapping.sourceStartPositionMs);
+        }
+        player.seekTo(localPositionMs);
+        playbackPhase = PlaybackPhase.TRACK_PLAYBACK;
+        publishPlaybackSnapshot();
         invalidateFuturePlan("Seek применён без щелчка · старый план отменён");
     }
 
     private void invalidateFuturePlan(String reason) {
         synchronized (planControl) {
+            if (transitioningScene != null
+                    && transitionMachine.state() == TransitionStateMachine.State.TRANSITIONING) {
+                deferredInvalidationReason = reason;
+                status = reason + " после текущего landing";
+                return;
+            }
+            deferredInvalidationReason = null;
             // First epoch cancels active work. Second epoch publishes the replacement anchor.
             planEpoch.incrementAndGet();
             transitionMachine.cancel();
             transitioningScene = null;
+            plannedTransitionScene = null;
+            pendingTargetTrack = null;
+            pendingTargetTrackPlan = null;
+            transitionSourceArtworkUri = "";
+            transitionTargetArtworkUri = "";
+            landingPublished = false;
             publishTransitionState();
             transitionInProgress = false;
             activeCandidateLevel = -1;
@@ -1321,9 +1640,11 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
 
     private void pauseEngine() {
         if (!running || player == null) return;
+        phaseBeforePause = playbackPhase;
         paused = true;
         player.pause();
         status = "Пауза";
+        publishPlaybackSnapshot();
         if (sessionPlayer != null) sessionPlayer.refresh();
         updateNotification();
     }
@@ -1331,10 +1652,25 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
     private void resumeEngine() {
         if (!running || player == null) return;
         paused = false;
+        if (phaseBeforePause != PlaybackPhase.IDLE
+                && phaseBeforePause != PlaybackPhase.PAUSED) {
+            playbackPhase = phaseBeforePause;
+        }
         player.resume();
         status = "Продолжаю single-PCM remix";
+        publishPlaybackSnapshot();
         if (sessionPlayer != null) sessionPlayer.refresh();
         updateNotification();
+    }
+
+    private void schedulePlaybackUiProjection(int token) {
+        main.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (!running || token != generation) return;
+                publishPlaybackSnapshot();
+                main.postDelayed(this, UI_PROJECTION_INTERVAL_MS);
+            }
+        }, UI_PROJECTION_INTERVAL_MS);
     }
 
     private void scheduleProgress(int token) {
@@ -1343,15 +1679,18 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
                 if (!running || token != generation) return;
                 if (player != null && sceneStartedAt > 0L) {
                     nativeOutputActive = player.nativeOutputActive();
-                    playbackPositionMs = player.currentPositionMs();
-                    playbackDurationMs = Math.max(1L, player.currentDurationMs());
+                    publishPlaybackSnapshot();
                     guaranteedRenderedHorizonMs = player.bufferedHorizonMs();
                     committedHorizonMs = Math.min(guaranteedRenderedHorizonMs,
                             barsToMs(planningAnalysis, 2));
                     planningHorizonMs = barsToMs(planningAnalysis, 32);
                     Track runwayTrack = planningTrack;
+                    MusicalTimelinePlanner.TrackPlan runwayPlan = planningTrackPlan;
                     naturalRunwayRemainingMs = runwayTrack == null ? 0L
-                            : Math.max(0L, runwayTrack.durationMs - planningPositionMs
+                            : Math.max(0L, runwayPlan != null
+                            && runwayPlan.trackId == runwayTrack.id
+                            ? runwayPlan.transitionStartPositionMs - planningPositionMs
+                            : runwayTrack.durationMs - planningPositionMs
                             - FALLBACK_BRIDGE_MS - 1_000L);
                     outputUnderruns = player.underruns();
                     RenderedScene current = activeScene;
@@ -1377,8 +1716,6 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
                     if (low) {
                         scheduleRenderAhead(token);
                     }
-                    progress = Math.max(0, Math.min(100,
-                            Math.round(playbackPositionMs * 100f / playbackDurationMs)));
                     transitionInProgress = current != null && current.transitionScene
                             && transitionMachine.state() == TransitionStateMachine.State.TRANSITIONING;
                 }
@@ -1401,13 +1738,20 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
         synchronized (planControl) {
             transitionMachine.cancel();
             transitioningScene = null;
+            deferredInvalidationReason = null;
             planEpoch.incrementAndGet();
             publishTransitionState();
         }
         running = false;
         paused = false;
+        playbackPhase = PlaybackPhase.IDLE;
+        phaseBeforePause = PlaybackPhase.IDLE;
+        playbackUiSnapshot = PlaybackUiSnapshot.IDLE;
         status = "Остановлено";
         currentTrack = currentMeta = nextTrack = transition = "—";
+        currentArtworkUri = "";
+        transitionSourceArtworkUri = "";
+        transitionTargetArtworkUri = "";
         progress = 0;
         playbackPositionMs = 0L;
         playbackDurationMs = 1L;
@@ -1427,7 +1771,38 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
     }
 
     public static String anonymizedDebugReport() {
-        return "{\"schema\":2,\"transition\":" + transitionDiagnosticsJson
+        PlaybackUiSnapshot playback = playbackUiSnapshot;
+        TrackPlaybackTimeline timeline = playback.trackTimeline;
+        TransitionUiState transitionUi = playback.transitionUiState;
+        return "{\"schema\":2,\"timeline\":{"
+                + "\"originalDurationMs\":" + timeline.durationMs + ','
+                + "\"entryPositionMs\":" + timeline.entryPositionMs + ','
+                + "\"currentOriginalPositionMs\":" + timeline.currentPositionMs + ','
+                + "\"plannedTransitionStartMs\":"
+                + jsonLong(timeline.nextTransitionStartMs) + ','
+                + "\"plannedExitPositionMs\":"
+                + jsonLong(timeline.plannedExitPositionMs) + ','
+                + "\"targetLandingPositionMs\":"
+                + jsonLong(timeline.landingPositionFromPreviousMs) + ','
+                + "\"markerSource\":" + jsonString(timeline.markerSource.name()) + ','
+                + "\"markerStatus\":" + jsonString(timeline.markerStatus.name())
+                + "},\"playbackPhase\":" + jsonString(playback.phase.name())
+                + ",\"transitionUi\":{"
+                + "\"phase\":" + jsonString(transitionUi.phase.name()) + ','
+                + "\"durationSamples\":"
+                + Math.max(0L, transitionUi.fullLandingSample
+                        - transitionUi.transitionStartSample) + ','
+                + "\"audioSamplePosition\":" + transitionUi.audioSamplePosition + ','
+                + "\"sourcePositionMs\":" + transitionUi.sourcePositionMs + ','
+                + "\"targetPositionMs\":" + transitionUi.targetPositionMs + ','
+                + "\"estimatedLandingPositionMs\":"
+                + transitionUi.estimatedLandingPositionMs + ','
+                + "\"activeTransformations\":"
+                + transformationsJson(transitionUi.activeStemOperations)
+                + "},\"ownership\":{"
+                + "\"vocal\":" + jsonString(vocalOwnerTimeline) + ','
+                + "\"stems\":" + jsonString(stemOwnershipTimeline)
+                + "},\"transition\":" + transitionDiagnosticsJson
                 + ",\"runtime\":{"
                 + "\"transitionState\":" + jsonString(transitionState) + ','
                 + "\"generationEta\":\"unavailable_no_neural_provider\","
@@ -1456,6 +1831,24 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
                 + "\"basicCrossfadeRate\":" + basicCrossfadeRate + ','
                 + "\"fallbackReason\":" + jsonString(fallbackReason)
                 + "}}";
+    }
+
+    private static String jsonLong(Long value) {
+        return value == null ? "null" : Long.toString(value);
+    }
+
+    private static String transformationsJson(List<AudioTransformationEvent> events) {
+        StringBuilder json = new StringBuilder("[");
+        for (AudioTransformationEvent event : events) {
+            if (json.length() > 1) json.append(',');
+            json.append('{')
+                    .append("\"stem\":").append(jsonString(event.stemType.name())).append(',')
+                    .append("\"type\":")
+                    .append(jsonString(event.transformationType.name())).append(',')
+                    .append("\"progress\":").append(event.progress)
+                    .append('}');
+        }
+        return json.append(']').toString();
     }
 
     private static String jsonString(String value) {
@@ -1492,6 +1885,8 @@ public class RemixEngineService extends MediaSessionService implements SceneAudi
             status = message;
             running = false;
             paused = false;
+            playbackPhase = PlaybackPhase.ERROR;
+            publishPlaybackSnapshot();
             stopAudioOnly();
             updateNotification();
             if (sessionPlayer != null) sessionPlayer.refresh();

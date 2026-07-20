@@ -9,31 +9,34 @@ public final class AudioContinuityValidatorSmokeTest {
     private static final int SAMPLE_RATE = 8_000;
     private static final int CHANNELS = 2;
 
-    @Test public void fiftyOneSecondActivationStaysOnOneContinuousTimeline() {
-        int durationFrames = SAMPLE_RATE * 53;
-        long activationSample = SAMPLE_RATE * 51L;
-        float[] timeline = new float[durationFrames * CHANNELS];
-        for (int frame = 0; frame < durationFrames; frame++) {
-            double time = frame / (double) SAMPLE_RATE;
-            double distanceFromActivation = (frame - activationSample) / (double) SAMPLE_RATE;
-            double morph = Math.max(0.0, Math.min(1.0, (distanceFromActivation + 1.0) / 2.0));
-            float value = (float) (Math.sin(2.0 * Math.PI * 220.0 * time)
-                    * (0.18 + 0.04 * morph));
-            timeline[frame * CHANNELS] = value;
-            timeline[frame * CHANNELS + 1] = value * 0.94f;
+    @Test public void variableActivationBoundariesStayOnOneContinuousTimeline() {
+        for (int boundarySeconds : new int[]{7, 19, 37, 51}) {
+            int durationFrames = SAMPLE_RATE * (boundarySeconds + 2);
+            long activationSample = SAMPLE_RATE * (long) boundarySeconds;
+            float[] timeline = new float[durationFrames * CHANNELS];
+            for (int frame = 0; frame < durationFrames; frame++) {
+                double time = frame / (double) SAMPLE_RATE;
+                double distance = (frame - activationSample) / (double) SAMPLE_RATE;
+                double morph = Math.max(0.0, Math.min(1.0, (distance + 1.0) / 2.0));
+                float value = (float) (Math.sin(2.0 * Math.PI * 220.0 * time)
+                        * (0.18 + 0.04 * morph));
+                timeline[frame * CHANNELS] = value;
+                timeline[frame * CHANNELS + 1] = value * 0.94f;
+            }
+
+            AudioContinuityValidator.Metrics metrics = AudioContinuityValidator.analyze(
+                    timeline, SAMPLE_RATE, CHANNELS, activationSample, 0);
+
+            assertEquals(boundarySeconds * 1_000.0,
+                    metrics.activationSample * 1_000.0 / SAMPLE_RATE, 0.0);
+            assertEquals(0.0, metrics.activationGapMs, 0.0);
+            assertEquals(0, metrics.activationUnderruns);
+            assertTrue(metrics.activationMaxSampleJump < 0.04f);
+            assertTrue(metrics.activationMaxDerivativeJump < 0.01f);
+            assertTrue(metrics.activationLufsJump < 0.1);
+            assertTrue(metrics.activationSpectralFluxSpike < 0.02);
+            assertEquals(durationFrames * CHANNELS, timeline.length);
         }
-
-        AudioContinuityValidator.Metrics metrics = AudioContinuityValidator.analyze(
-                timeline, SAMPLE_RATE, CHANNELS, activationSample, 0);
-
-        assertEquals(51_000.0, metrics.activationSample * 1_000.0 / SAMPLE_RATE, 0.0);
-        assertEquals(0.0, metrics.activationGapMs, 0.0);
-        assertEquals(0, metrics.activationUnderruns);
-        assertTrue(metrics.activationMaxSampleJump < 0.04f);
-        assertTrue(metrics.activationMaxDerivativeJump < 0.01f);
-        assertTrue(metrics.activationLufsJump < 0.1);
-        assertTrue(metrics.activationSpectralFluxSpike < 0.02);
-        assertEquals(durationFrames * CHANNELS, timeline.length);
     }
 
     @Test public void discontinuityMetricsDetectARejectedBoundary() {

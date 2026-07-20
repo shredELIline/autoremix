@@ -11,6 +11,7 @@ final class SpectralStemSeparator {
     private static final int BINS = FFT / 2 + 1;
     private static final int TIME_RADIUS = 5;
     private static final int FREQ_RADIUS = 6;
+    private static final int ANALYSIS_CHUNK_FRAMES = 512;
 
     private SpectralStemSeparator() {}
 
@@ -19,36 +20,12 @@ final class SpectralStemSeparator {
         if (frames < FFT * 2) return fallback(source);
         int analysisFrames = 1 + Math.max(0, (frames - FFT) / HOP);
         float[] window = hann(FFT);
-        float[][] midMag = new float[analysisFrames][BINS];
-        float[][] sideMag = new float[analysisFrames][BINS];
         float[] real = new float[FFT];
         float[] imag = new float[FFT];
-
-        for (int frame = 0; frame < analysisFrames; frame++) {
-            int offset = frame * HOP;
-            for (int i = 0; i < FFT; i++) {
-                float left = source.stereo[(offset + i) * 2];
-                float right = source.stereo[(offset + i) * 2 + 1];
-                real[i] = (left + right) * .5f * window[i];
-                imag[i] = 0f;
-            }
-            FastFft.transform(real, imag, false);
-            for (int k = 0; k < BINS; k++) midMag[frame][k] = hypot(real[k], imag[k]);
-
-            for (int i = 0; i < FFT; i++) {
-                float left = source.stereo[(offset + i) * 2];
-                float right = source.stereo[(offset + i) * 2 + 1];
-                real[i] = (left - right) * .5f * window[i];
-                imag[i] = 0f;
-            }
-            FastFft.transform(real, imag, false);
-            for (int k = 0; k < BINS; k++) sideMag[frame][k] = hypot(real[k], imag[k]);
-        }
 
         float[] lead = new float[source.stereo.length];
         float[] bass = new float[source.stereo.length];
         float[] drums = new float[source.stereo.length];
-        float[] norm = new float[frames];
         float[] midR = new float[FFT];
         float[] midI = new float[FFT];
         float[] sideR = new float[FFT];
@@ -62,7 +39,24 @@ final class SpectralStemSeparator {
         float[] drumRR = new float[FFT];
         float[] drumRI = new float[FFT];
 
-        for (int frame = 0; frame < analysisFrames; frame++) {
+        // Keep only one analysis core plus the temporal-mask halo. Synthesis frames are
+        // emitted once into the global overlap-add reconstruction, so chunk seams are exact.
+        for (int coreStart = 0; coreStart < analysisFrames;
+             coreStart += ANALYSIS_CHUNK_FRAMES) {
+            int coreEnd = Math.min(analysisFrames, coreStart + ANALYSIS_CHUNK_FRAMES);
+            int haloStart = Math.max(0, coreStart - TIME_RADIUS);
+            int haloEnd = Math.min(analysisFrames, coreEnd + TIME_RADIUS);
+            float[][] midMag = new float[haloEnd - haloStart][BINS];
+            float[][] sideMag = new float[haloEnd - haloStart][BINS];
+            for (int frame = haloStart; frame < haloEnd; frame++) {
+                int offset = frame * HOP;
+                analyzeMagnitudes(source, window, offset, false,
+                        midMag[frame - haloStart], real, imag);
+                analyzeMagnitudes(source, window, offset, true,
+                        sideMag[frame - haloStart], real, imag);
+            }
+
+            for (int frame = coreStart; frame < coreEnd; frame++) {
             int offset = frame * HOP;
             for (int i = 0; i < FFT; i++) {
                 float left = source.stereo[(offset + i) * 2];
@@ -77,14 +71,16 @@ final class SpectralStemSeparator {
             zero(drumLR); zero(drumLI); zero(drumRR); zero(drumRI);
 
             for (int k = 0; k < BINS; k++) {
-                float magnitude = midMag[frame][k] + sideMag[frame][k] * .72f + 1e-7f;
-                float harmonic = temporalMean(midMag, sideMag, frame, k);
-                float percussive = frequencyMean(midMag, sideMag, frame, k);
+                int localFrame = frame - haloStart;
+                float magnitude = midMag[localFrame][k]
+                        + sideMag[localFrame][k] * .72f + 1e-7f;
+                float harmonic = temporalMean(midMag, sideMag, localFrame, k);
+                float percussive = frequencyMean(midMag, sideMag, localFrame, k);
                 float h2 = harmonic * harmonic;
                 float p2 = percussive * percussive;
                 float hMask = h2 / (h2 + p2 + 1e-9f);
                 float pMask = 1f - hMask;
-                float center = midMag[frame][k] / magnitude;
+                float center = midMag[localFrame][k] / magnitude;
                 float frequency = k * source.sampleRate / (float) FFT;
 
                 float bassShape = lowShelf(frequency, 65f, 245f);
@@ -122,13 +118,14 @@ final class SpectralStemSeparator {
                 bass[target * 2 + 1] += b;
                 drums[target * 2] += drumLR[i] * w;
                 drums[target * 2 + 1] += drumRR[i] * w;
-                norm[target] += w * w;
             }
+        }
         }
 
         float[] backing = new float[source.stereo.length];
         for (int frame = 0; frame < frames; frame++) {
-            float scale = norm[frame] > 1e-5f ? 1f / norm[frame] : 0f;
+            float norm = overlapNorm(window, frame, analysisFrames);
+            float scale = norm > 1e-5f ? 1f / norm : 0f;
             int i = frame * 2;
             lead[i] *= scale; lead[i + 1] *= scale;
             bass[i] *= scale; bass[i + 1] *= scale;
@@ -137,6 +134,30 @@ final class SpectralStemSeparator {
             backing[i + 1] = source.stereo[i + 1] - lead[i + 1] - bass[i + 1] - drums[i + 1];
         }
         return new StemBundle(source.sampleRate, lead, drums, bass, backing);
+    }
+
+    private static void analyzeMagnitudes(PcmAudio source, float[] window, int offset,
+                                          boolean side, float[] magnitudes,
+                                          float[] real, float[] imag) {
+        for (int i = 0; i < FFT; i++) {
+            float left = source.stereo[(offset + i) * 2];
+            float right = source.stereo[(offset + i) * 2 + 1];
+            real[i] = (side ? left - right : left + right) * .5f * window[i];
+            imag[i] = 0f;
+        }
+        FastFft.transform(real, imag, false);
+        for (int k = 0; k < BINS; k++) magnitudes[k] = hypot(real[k], imag[k]);
+    }
+
+    private static float overlapNorm(float[] window, int target, int analysisFrames) {
+        int first = Math.max(0, (target - FFT + HOP) / HOP);
+        int last = Math.min(analysisFrames - 1, target / HOP);
+        float norm = 0f;
+        for (int frame = first; frame <= last; frame++) {
+            float w = window[target - frame * HOP];
+            norm += w * w;
+        }
+        return norm;
     }
 
     private static StemBundle fallback(PcmAudio source) {

@@ -28,8 +28,9 @@ final class SceneRenderer {
 
     static RenderedScene renderPrelude(Context context, Track track, TrackAnalysis analysis,
                                        TrackAnalysis.Fragment fragment, long durationMs) throws Exception {
-        long available = Math.max(8_000L, track.durationMs - fragment.cueMs - 2_000L);
-        long requested = Math.max(20_000L, Math.min(durationMs, available));
+        long available = Math.max(0L, track.durationMs - fragment.cueMs - 1_000L);
+        if (available < 1_000L) throw new IllegalStateException("track has no prelude runway");
+        long requested = Math.min(Math.max(1_000L, durationMs), available);
         PcmAudio decoded = PcmDecoder.decode(context, track, fragment.cueMs, requested, PROCESS_RATE);
         float[] programme = decoded.stereo.clone();
         applyProgramGain(programme, analysis.loudnessDb);
@@ -38,7 +39,9 @@ final class SceneRenderer {
         MasteringChain.applyEdgeSafety(output.stereo, OUTPUT_RATE, 8);
         return new RenderedScene(output, track, analysis, fragment,
                 fragment.cueMs + decoded.durationMs(), track.displayName(),
-                "PCM-прелюдия · готовлю stem-сцену в фоне", false);
+                "PCM-прелюдия · готовлю stem-сцену в фоне", false)
+                .withTimelineMapping(SceneTimelineMapping.normal(track.id, track.durationMs,
+                        fragment.cueMs, OUTPUT_RATE, output.frames()));
     }
 
 
@@ -54,7 +57,7 @@ final class SceneRenderer {
             TrackAnalysis.Fragment fragment, long startMs, long durationMs,
             int variationMask, String reason) throws Exception {
         long available = Math.max(0L, track.durationMs - startMs - 1_000L);
-        if (available < 8_000L) throw new IllegalStateException("track ended");
+        if (available < 250L) throw new IllegalStateException("track ended");
         long requested = Math.min(durationMs, available);
         PcmAudio decoded = PcmDecoder.decode(context, track, startMs, requested, PROCESS_RATE);
         float[] programme = decoded.stereo.clone();
@@ -65,7 +68,9 @@ final class SceneRenderer {
         PcmAudio output = PcmDecoder.resample(new PcmAudio(PROCESS_RATE, programme), OUTPUT_RATE);
         MasteringChain.applyEdgeSafety(output.stereo, OUTPUT_RATE, 7);
         return new RenderedScene(output, track, analysis, fragment,
-                startMs + decoded.durationMs(), track.displayName(), reason, false);
+                startMs + decoded.durationMs(), track.displayName(), reason, false)
+                .withTimelineMapping(SceneTimelineMapping.normal(track.id, track.durationMs,
+                        startMs, OUTPUT_RATE, output.frames()));
     }
 
     static void applyDeterministicVariation(float[] stereo, int sampleRate,
@@ -156,6 +161,8 @@ final class SceneRenderer {
         TrackAnalysis anchorAnalysis;
         TrackAnalysis.Fragment anchorFragment;
         long anchorPosition;
+        long phaseSourceMs = Math.round(phase.skippedFrames * 1000.0
+                / PROCESS_RATE * plan.tempoRatio);
         if (plan.type.returnsToA) {
             anchorTrack = aTrack;
             anchorAnalysis = aAnalysis;
@@ -166,8 +173,6 @@ final class SceneRenderer {
             anchorTrack = bTrack;
             anchorAnalysis = bAnalysis;
             anchorFragment = bFragment;
-            long phaseSourceMs = Math.round(phase.skippedFrames * 1000.0
-                    / PROCESS_RATE * plan.tempoRatio);
             long consumedSourceMs = Math.round(renderedTransitionMs * plan.tempoRatio) + phaseSourceMs;
             anchorPosition = Math.min(bTrack.durationMs - 2_000L, bStart + consumedSourceMs);
         }
@@ -175,8 +180,17 @@ final class SceneRenderer {
         String description = plan.type.label + " · " + plan.bars + " тактов · " + plan.reason
                 + " · HPSS stems · beat phase " + Math.round(phase.confidence * 100f)
                 + "% · single PCM master";
+        long targetStartPosition = bStart + phaseSourceMs;
+        long sourceExitPosition = Math.min(aTrack.durationMs,
+                aPositionMs + Math.round(soloFrames * 1_000.0 / PROCESS_RATE)
+                        + renderedTransitionMs);
         return new RenderedScene(output, anchorTrack, anchorAnalysis, anchorFragment,
-                anchorPosition, title, description, true);
+                anchorPosition, title, description, true)
+                .withTimelineMapping(SceneTimelineMapping.transition(
+                        aTrack.id, bTrack.id, aTrack.durationMs, bTrack.durationMs,
+                        aPositionMs, targetStartPosition, anchorPosition,
+                        sourceExitPosition, 0L, output.frames(), OUTPUT_RATE,
+                        plan.tempoRatio));
     }
 
     static ContinuousRender renderContinuousTransition(
@@ -185,18 +199,27 @@ final class SceneRenderer {
             TrackAnalysis.Fragment aFragment, long aPositionMs,
             Track bTrack, TrackAnalysis bAnalysis,
             TrackAnalysis.Fragment bFragment, LayerPlan hint,
-            long transitionId, long activationSample,
+            long transitionId, long activationSample, long plannedTransitionMs,
             int activationUnderruns, boolean userForcedSkip,
             BooleanSupplier preparationDeadlineSafe) throws Exception {
-        long transitionMs = Math.max(18_000L,
-                Math.min(48_000L, barsToMs(aAnalysis.bpm, 16)));
-        long postLandingMs = Math.max(8_000L,
-                Math.min(24_000L, barsToMs(aAnalysis.bpm, 8)));
+        long remainingA = Math.max(0L, aTrack.durationMs - aPositionMs - 1_000L);
+        long remainingB = Math.max(0L, bTrack.durationMs - bFragment.cueMs
+                - TARGET_RUNWAY_RESERVE_MS);
+        long transitionMs = MusicalTimelinePlanner.transitionLengthMs(
+                aAnalysis, aFragment, bAnalysis, bFragment, hint, remainingA, remainingB,
+                plannedTransitionMs);
+        long sourceBarMs = MusicalTimelinePlanner.barMs(aAnalysis, aFragment);
+        long transitionBars = Math.max(1L,
+                Math.round(transitionMs / (double) sourceBarMs));
+        if (transitionBars < 6L || transitionBars > 16L) {
+            throw new IllegalStateException("planned transition exceeds prepared-scene policy");
+        }
+        int postLandingBars = Math.max(4, Math.min(6, hint.bars / 4));
+        long postLandingMs = sourceBarMs * postLandingBars;
         int transitionFrames = msToFrames(transitionMs);
         int postLandingFrames = msToFrames(postLandingMs);
-        long remainingA = Math.max(0L, aTrack.durationMs - aPositionMs - 1_000L);
         if (remainingA < transitionMs) {
-            throw new IllegalStateException("outgoing track has no 16-bar stem runway");
+            throw new IllegalStateException("outgoing track has no planned stem runway");
         }
 
         PcmAudio aDecoded = PcmDecoder.decode(context, aTrack, aPositionMs,
@@ -230,12 +253,14 @@ final class SceneRenderer {
         PcmAudio bAligned = fitLength(phase.audio, transitionFrames + postLandingFrames);
         PcmAudio bTransition = bAligned.sliceFrames(0, transitionFrames);
 
-        StemBundle aStems = SpectralStemSeparator.separate(aTransition);
+        QuantizedStemBundle aStems = QuantizedStemBundle.from(
+                SpectralStemSeparator.separate(aTransition));
         requirePreparationDeadline(preparationDeadlineSafe);
-        StemBundle bStems = SpectralStemSeparator.separate(bTransition);
+        QuantizedStemBundle bStems = QuantizedStemBundle.from(
+                SpectralStemSeparator.separate(bTransition));
         requirePreparationDeadline(preparationDeadlineSafe);
         long outputSamplesPerBar = Math.max(1L,
-                Math.round(transitionMs * OUTPUT_RATE / 16_000.0));
+                Math.round(sourceBarMs * OUTPUT_RATE / 1_000.0));
         long sourceStartSample = Math.max(0L,
                 Math.round(aPositionMs * OUTPUT_RATE / 1_000.0));
         long phaseSourceMs = Math.round(phase.skippedFrames * 1_000.0
@@ -250,14 +275,18 @@ final class SceneRenderer {
         float timbre = ContinuityDirector.advancedVibeSimilarity(
                 aAnalysis, aFragment, bAnalysis, bFragment);
         float energy = 1f - Math.min(1f, Math.abs(aFragment.energy - bFragment.energy));
+        long transitionOutputSamples = Math.max(1L,
+                Math.round(transitionMs * OUTPUT_RATE / 1_000.0));
         ContinuousScenePlanner.PlanningRequest.Builder request =
                 ContinuousScenePlanner.PlanningRequest.builder(
                                 transitionId, aTrack.id, bTrack.id,
                                 activationSample, outputSamplesPerBar)
                         .sourceStartSample(sourceStartSample)
                         .targetLandingSample(targetLandingSample)
+                        .transitionSamples(transitionOutputSamples)
                         .separator(true, separatorConfidence)
-                        .buffer(true, outputSamplesPerBar * 16L,
+                        .buffer(true, Math.max(outputSamplesPerBar * 8L,
+                                        transitionOutputSamples),
                                 activationUnderruns, 0f)
                         .sampleDiscontinuity(0f)
                         .vocalChopSafe(!aFragment.isVocalHeavy())
@@ -324,11 +353,23 @@ final class SceneRenderer {
                 + " · deterministic structured stem scene · anchor "
                 + planning.plan.selectedAnchorSet.get(0).semanticRole.name()
                 + " · single vocal owner · one master timeline";
+        long sourceExitSample = planning.plan.lastAudibleSample(
+                ContinuousSceneTransitionPlan.Source.A);
+        long sourceExitPosition = Math.min(aTrack.durationMs,
+                aPositionMs + Math.round((sourceExitSample - planning.plan.activationSample)
+                        * 1_000.0 / OUTPUT_RATE));
+        long targetStartPosition = bStart + phaseSourceMs;
         RenderedScene scene = new RenderedScene(
                 new PcmAudio(OUTPUT_RATE, new float[0]),
                 bTrack, bAnalysis, bFragment,
                 anchorPosition, aTrack.displayName() + "  ×  " + bTrack.displayName(),
-                description, true).withPreparedStemScene(preparedStemScene, planning.plan);
+                description, true).withPreparedStemScene(preparedStemScene, planning.plan)
+                .withTimelineMapping(SceneTimelineMapping.transition(
+                        aTrack.id, bTrack.id, aTrack.durationMs, bTrack.durationMs,
+                        aPositionMs, targetStartPosition, targetLandingMs,
+                        sourceExitPosition, planning.plan.activationSample,
+                        planning.plan.landingSample, OUTPUT_RATE, hint.tempoRatio))
+                .withTransformationEvents(planning.plan.transformationEvents(hint.tempoRatio));
         return new ContinuousRender(scene, planning, landingMetrics);
     }
 
@@ -405,10 +446,16 @@ final class SceneRenderer {
         PcmAudio output = PcmDecoder.resample(new PcmAudio(PROCESS_RATE, mixed), OUTPUT_RATE);
         MasteringChain.applyEdgeSafety(output.stereo, OUTPUT_RATE, edgeMs);
         long consumedB = Math.round(frames * 1000.0 / PROCESS_RATE);
+        long landingPosition = Math.min(bTrack.durationMs - 1_000L, bStart + consumedB);
+        long sourceExitPosition = Math.min(aTrack.durationMs, aStart + consumedB);
         return new RenderedScene(output, bTrack, bAnalysis, bFragment,
-                Math.min(bTrack.durationMs - 1_000L, bStart + consumedB),
+                landingPosition,
                 aTrack.displayName() + "  ×  " + bTrack.displayName(),
-                description, true);
+                description, true)
+                .withTimelineMapping(SceneTimelineMapping.transition(
+                        aTrack.id, bTrack.id, aTrack.durationMs, bTrack.durationMs,
+                        aStart, bStart, landingPosition, sourceExitPosition,
+                        0L, output.frames(), OUTPUT_RATE, 1f));
     }
 
     private static PcmAudio fitLength(PcmAudio input, int targetFrames) {
@@ -451,9 +498,6 @@ final class SceneRenderer {
 
     private static ContinuousSceneTransitionPlan.SemanticRole backingRole(
             LayerPlan.Type type) {
-        if (type == LayerPlan.Type.ATMOSPHERE_CHAIN) {
-            return ContinuousSceneTransitionPlan.SemanticRole.ATMOSPHERE;
-        }
         if (type == LayerPlan.Type.MELODY_RELAY_TAKEOVER) {
             return ContinuousSceneTransitionPlan.SemanticRole.GUITAR;
         }
@@ -462,7 +506,7 @@ final class SceneRenderer {
 
     private static float separatorConfidence(
             TrackAnalysis aAnalysis, TrackAnalysis bAnalysis,
-            StemBundle a, StemBundle b) {
+            QuantizedStemBundle a, QuantizedStemBundle b) {
         float analysis = Math.min(aAnalysis.styleConfidence, bAnalysis.styleConfidence);
         int activePairs = 0;
         if (a.leadRms > 1e-5f && b.leadRms > 1e-5f) activePairs++;
