@@ -1,6 +1,6 @@
 # Current state
 
-Snapshot: `2.3.0` release, 2026-07-19.
+Snapshot: `2.4.0` release, 2026-07-20.
 
 ## Confirmed implementation
 
@@ -15,8 +15,8 @@ Snapshot: `2.3.0` release, 2026-07-19.
 - Continuation reservoir, graph, bounded 16–32 bar beam planner, hard repetition
   constraints, and arrangement novelty metrics.
 - Persistent 48 kHz stereo `MasterAudioGraph`, one sample clock/output stream,
-  incremental `PreparedStemScene` rendering, a 16-bar handoff, an 8-bar in-scene
-  B landing, and a prepared B runway.
+  incremental compact `PreparedStemScene` rendering, variable 6–16-bar handoffs,
+  a 4–6-bar in-scene B landing runway, and chunked stem analysis.
 - Android Kotlin/Compose shell, WorkManager preprocessing, Media3 session,
   retained Java deterministic provider, Oboe/AAudio output, and AudioTrack
   fallback.
@@ -25,7 +25,7 @@ Snapshot: `2.3.0` release, 2026-07-19.
   continuity metrics, strategy statistics, inspector UI, and anonymized JSON.
 - iOS SwiftUI/AVAudioEngine target using the shared C ABI. macOS CI builds and
   tests the simulator target.
-- Host and Android unit tests, deterministic fuzz, exact 51.000-second graph
+- Host and Android unit tests, deterministic fuzz, varied full-track timeline
   activation, vocal collision, fallback order, landing, click, and golden-audio
   tests.
 

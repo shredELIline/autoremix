@@ -12,7 +12,7 @@
 ![On-device](https://img.shields.io/badge/audio-on--device-45D6C5)
 ![Privacy](https://img.shields.io/badge/telemetry-none-45D6C5)
 
-Local, deterministic AutoDJ research app for Android and iOS. It plans independent stem timelines, prepares progressive non-repeating continuations, and keeps audio processing offline.
+Local, deterministic AutoDJ research app for Android and iOS. It plans independent stem timelines, shows each song on its full original timeline, prepares progressive non-repeating continuations, and keeps audio processing offline.
 
 [Showcase](https://shredELIline.github.io/autoremix/) · [Architecture](ARCHITECTURE.md) · [Contributing](CONTRIBUTING.md)
 
@@ -37,6 +37,7 @@ Local, deterministic AutoDJ research app for Android and iOS. It plans independe
 
 | Version | Android | iOS | Source |
 | --- | --- | --- | --- |
+| [2.4.0](https://github.com/shredELIline/autoremix/releases/tag/v2.4.0) · code 13 | Preview APK | Source target | `v2.4.0` |
 | [2.3.0](https://github.com/shredELIline/autoremix/releases/tag/v2.3.0) · code 12 | Preview APK | Source target | `v2.3.0` |
 | [2.2.0](https://github.com/shredELIline/autoremix/releases/tag/v2.2.0) · code 11 | Preview APK | Source target | `v2.2.0` |
 | [2.1.1](https://github.com/shredELIline/autoremix/releases/tag/v2.1.1) · code 10 | Preview APK | Source target | `v2.1.1` |
@@ -51,13 +52,17 @@ A transition is an arrangement change, not two full mixes fading past each other
 
 On Android, selecting Track B prepares decoded B material, deterministic stems, DSP state, and an immutable `ContinuousSceneTransitionPlan`. The same 48 kHz stereo master stream renders A stems, the hybrid scene, the clean-B landing, and the following B runway. No transition WAV, player switch, decoder startup, output restart, or ring reset occurs at activation.
 
+Outside an active transition, the player shows the original song duration and position. Its engine-owned `TrackPlaybackTimeline` carries the entry position, current original position, planned exit, and confirmed next-transition marker. The planner derives these points from the track analysis and available runway instead of fixed playback windows. MediaStore album artwork is shown when available, with deterministic letter artwork as fallback.
+
+While a layered transition is active or landing, the normal progress bar gives way to a transition scene driven by the master audio sample clock. It presents the real A, B, and generated stem operations from the accepted plan. After full landing, the target song timeline returns at its actual non-zero original position.
+
 The continuation reservoir and graph provide distinct compatible fragments instead of one repeated hold loop. Planning excludes recent fragment IDs and melodic fingerprints, rejects infinite self-edges, and requires audible arrangement change across the continuation.
 
-| Library | Now playing | Preparing | In progress |
+| Full timeline | Preparing | Stem transition | Landed timeline |
 | --- | --- | --- | --- |
-| ![Local library](docs/assets/screenshots/library-dark.png) | ![Now playing](docs/assets/screenshots/now-playing-dark.png) | ![Transition preparation](docs/assets/screenshots/transition-dark.png) | ![Transition in progress](docs/assets/screenshots/transition-in-progress-dark.png) |
+| ![Full track timeline](docs/assets/screenshots/timeline-normal-00-15-dark.png) | ![Transition preparation](docs/assets/screenshots/transition-preparing-dark.png) | ![Sample-clock stem transition](docs/assets/screenshots/transition-guitar-anchor-dark.png) | ![Non-zero target landing](docs/assets/screenshots/timeline-landed-01-14-dark.png) |
 
-More: [queue](docs/assets/screenshots/queue-dark.png), [analysis cache](docs/assets/screenshots/analysis-cache-dark.png), [settings](docs/assets/screenshots/settings-dark.png), [light theme](docs/assets/screenshots/now-playing-light.png). These screenshots predate the continuous-scene inspector fields.
+More: [all ten timeline fixtures](docs/assets/screenshots/README.md), [transition demo](docs/assets/screenshots/transition-demo.gif), [queue](docs/assets/screenshots/queue-dark.png), [analysis cache](docs/assets/screenshots/analysis-cache-dark.png), and [settings](docs/assets/screenshots/settings-dark.png).
 
 ## Audio pipeline
 
@@ -72,7 +77,7 @@ flowchart LR
   Ring --> Device["Android Oboe/AAudio"]
 ```
 
-The primary Android path prepares a 16-bar stem handoff plus an 8-bar clean-B landing and queues a B runway before activation. A missed readiness deadline keeps A playing and retries planning; other primary-path failures use legacy intelligent, phrase-aware, then basic crossfade. Every fallback carries a reason.
+The primary Android path schedules variable musical entry, transition, exit, and landing points from the accepted plan, then queues sufficient target runway before activation. A missed readiness deadline keeps the source playing and retries planning; other primary-path failures use legacy intelligent, phrase-aware, then basic crossfade. Every fallback carries a reason.
 
 The shared C++17 core provides sample-accurate automation, continuation planning, repetition evaluation, diagnostic quality gates, cache identities, lifecycle epochs, rapid-Next coalescing, and a stable C ABI. Audio callbacks only consume pre-rendered PCM from a preallocated lock-free ring. Preparation, logging, and candidate generation stay outside the callback.
 
@@ -114,7 +119,7 @@ See [current-state audit](docs/architecture/CURRENT_STATE.md), [target state](do
 
 The core can map caller-supplied throughput, memory, battery, core, and thermal measurements to bounded search profiles. Android currently runs the deterministic Tier-C profile; first-launch device measurement is still roadmap work. A future model must pass the same technical gates and license review. See [on-device ML decision](docs/research/ON_DEVICE_ML.md) and [model licenses](MODEL_LICENSES.md).
 
-The inspector reports strategy, AI and separator provenance, anchors, vocal/stem timelines, candidate scores and vetoes, fallback reason, activation sample, buffer, underruns, gap, click, loudness, and spectral metrics. Exported JSON contains no user audio or media identity.
+The inspector reports original duration and position, entry, planned transition and exit, target landing, playback phase, active stem operations, strategy, provenance, candidate scores and vetoes, fallback reason, activation sample, buffer, underruns, gap, click, loudness, and spectral metrics. Exported JSON contains no user audio or media identity.
 
 ## Build
 
@@ -173,6 +178,7 @@ The hosted showcase is deployed from `docs/` by [the Pages workflow](.github/wor
 ## Tests and measurements
 
 - deterministic unit, DSP, cancellation, lifecycle, C ABI, and fuzz tests;
+- varied-schedule, original-position, landing, playback-phase, and timeline UI tests;
 - finite-sample, length, peak, DC, derivative, boundary, loudness, rhythm, harmony, stem-conflict, and anchor-continuity diagnostics;
 - Android lint, unit, assemble, and Compose screenshot tests;
 - iOS simulator build/tests in macOS CI;

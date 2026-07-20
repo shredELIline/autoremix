@@ -8,4 +8,16 @@ Run from the repository root:
 ./platform-android/scripts/capture-screenshots.sh
 ```
 
-The harness uses deterministic demo state. No user media or network access is required.
+The harness uses deterministic timeline and sample-clock transition states. No user
+media or network access is required. It captures:
+
+- normal playback at `00:15`;
+- non-zero track entry and landing positions;
+- planned and preparing transition markers;
+- guitar, bass, key, and vocal handoffs;
+- reduced-motion transition state.
+
+Animated flow: [transition-demo.gif](transition-demo.gif).
+
+The same instrumented suite checks timeline/transition visibility, marker semantics,
+non-zero landing labels, and 120 sample-clock UI updates.
